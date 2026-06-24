@@ -1,0 +1,9 @@
+numpy==1.26.4
+scipy==1.15.3
+pandas==2.0.1
+h5py==3.16.0
+PyYAML==5.4.1
+astropy==5.2.2
+healpy==1.18.1
+matplotlib==3.7.1
+psutil==5.9.5

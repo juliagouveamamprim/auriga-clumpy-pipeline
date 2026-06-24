@@ -1,0 +1,162 @@
+cosmo_constants:
+  G:
+    value: !!float 4.297e-06
+    unit: kpc * km2 / (Msun * s2)
+  H_0:
+    value: 67.7
+    unit: km / (s * Mpc)
+  rho_crit:
+    value: 135.73
+    unit: Msun / kpc3
+  delta_overdensity: 200.
+
+host:
+  density_profile: 'NFW'
+  R_vir:
+    value: 220
+    unit: kpc
+  r_s:
+    value: 20.0
+    unit: kpc
+  rho_0:
+    value: !!float 9.04e6
+    unit: Msun / kpc3
+  position_Earth:
+    value: [8.5, 0., 0.]
+    unit: kpc
+
+  # Required only if use_spherical_shells=True.
+  # Kept here to preserve the structure expected by Sara's code.
+  Draco:
+    Mass:
+      value: 2.e8
+      unit: Msun
+    D_GC:
+      value: 80.
+      unit: kpc
+    Cdelta: 19.
+    percentage_accepted: 0.1
+    distance_subhalo_cutoff:
+      value: 1.
+      unit: kpc
+
+repopulations:
+  param_to_repopulate: Vmax
+  RangeMin: 0.1
+  RangeMax: 120.
+
+  number_iterations: 1
+  print_frequency: 1
+  verbose: True
+
+  # Full catalog in HDF5, not only brightest subhalos.
+  save_full_repop: True
+
+  # Sara explicitly recommended this.
+  use_spherical_shells: False
+
+  # Irrelevant when save_full_repop=True, but required by the code.
+  number_highest: 2
+  params_to_order_by:
+    - Js
+
+  # In full-repop mode, these flags are currently saved, not used to remove halos.
+  # Later we will modify the code so that:
+  # - engulfs_Earth=True halos are not written;
+  # - Roche-failed halos remain written but with Js=0.
+  allow_break_Roche: True
+  allow_engulf_Earth: True
+
+  # null = random seed. The code prints a warning for null, but it still runs.
+  # Use an integer only for reproducibility tests.
+  rng_seed: null
+
+  params_to_save:
+    Vmax:
+      unit: km / s
+    D_GC:
+      unit: kpc
+    R_s:
+      unit: kpc
+    R_t:
+      unit: kpc
+    Rmax:
+      unit: kpc
+    theta_s:
+      unit: degree
+    Js:
+      formula: J_general
+      unit: GeV2 / cm5
+      integrate_up_to: 'R_s'
+
+configurations:
+
+  hydro_resilient:
+    internal_density_profile: 'NFW'
+    relation_Mass_Vmax: M200_from_VmaxRmax
+    use_Roche: True
+
+    Cv:
+      formula: 'Cv_Mol2021_redshift0_scattered'
+      params:
+        c0: 192879.057
+        sigma_scatter: 0.374942
+        ci: [55., -0.195, 0.089, 0.089, -0.54]
+      variables:
+        'Vmax'
+
+    Cmass:
+      formula: 'C_200'
+      params:
+        c0: 192879.057
+        sigma_scatter: 0.374942
+        ci: [55., -0.195, 0.089, 0.089, -0.54]
+
+    SHVF:
+      formula: 'power_law'
+      params:
+        V0: 5.51
+        slope: -4.08
+
+    SRD:
+      formula: 'srd_constant'
+      params:
+        args: 1.0
+
+  hydro_fragile:
+    internal_density_profile: 'NFW'
+    relation_Mass_Vmax: M200_from_VmaxRmax
+    use_Roche: True
+
+    Cv:
+      formula: 'Cv_Mol2021_redshift0_scattered'
+      params:
+        c0: 192879.057
+        sigma_scatter: 0.374942
+        ci: [55., -0.195, 0.089, 0.089, -0.54]
+      variables:
+        'Vmax'
+
+    Cmass:
+      formula: 'C_200'
+      params:
+        c0: 192879.057
+        sigma_scatter: 0.374942
+        ci: [55., -0.195, 0.089, 0.089, -0.54]
+
+    SHVF:
+      formula: 'power_law'
+      params:
+        V0: 5.3
+        slope: -4.08
+
+    SRD:
+      formula: 'srd_exponential'
+      params:
+        exp_fit:
+          - -0.27
+          - 16.16391
+          - 220.0
+        last_subhalo:
+          value: 15.71
+          unit: kpc

@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Environments
+.env
+.venv/
+venv/
+conda-env/
+
+# Generated Auriga catalogs
+*.h5
+*.hdf5
+
+# CLUMPY and sky-map outputs
+*.fits
+*.fits.gz
+*.root
+
+# Generated catalogs and lists
+outputs/
+results/
+generated/
+logs/
+*.log
+progress_*.txt
+
+# Temporary and editor files
+*.tmp
+*.swp
+*~
+.DS_Store
+.vscode/
+.idea/
+
+# Packaging and test coverage
+build/
+dist/
+*.egg-info/
+.coverage
+htmlcov/

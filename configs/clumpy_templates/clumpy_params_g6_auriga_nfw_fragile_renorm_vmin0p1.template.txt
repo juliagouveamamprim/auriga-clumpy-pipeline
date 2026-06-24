@@ -1,0 +1,187 @@
+# CLUMPY, version 4.0
+# Standard parameter file for simulation mode g6
+# Auriga + CLUMPY full-sky HEALPix template
+#
+# Scenario: hydro_fragile
+# Template type: already renormalized smooth MW NFW normalization
+# Intended use: base template for all Auriga Vmax_min = 0.1 km/s realizations
+#
+# Scientific/technical choices:
+# - Smooth Milky Way component kept as NFW/Zhao with fixed shape parameters.
+# - Smooth MW normalization was renormalized once to avoid double-counting
+#   the expected mass added as repopulated Auriga subhalos.
+# - MW statistical substructure is disabled: gMW_SUBS_N_INM1M2 = 0.
+# - Substructure inside listed external halos is disabled:
+#   gDSPH/GALAXY/CLUSTER_SUBS_MASSFRACTION = 0.
+# - External halos are read from gLIST_HALOES.
+# - Full-sky HEALPix map: NSIDE = 1024, FOV = 360 deg x 180 deg.
+#
+# Renormalization run used:
+#   script: renormalize_mw_profile.py
+#   input_yaml: Auriga_tables/V0p1/input_data.yml
+#   scenario: fragile
+#   sub_mass_radius: rs
+#   Vmax range: [0.1, 120.0] km/s
+#   N_MC: 1000000
+#   seed: 12345
+#   include_cv_scatter: True
+#
+# SHVF/cV inputs interpreted by the renormalization:
+#   SHVF: dN/dV = 10^bb V^mm
+#   bb: 5.3000000000e+00
+#   mm: -4.0800000000e+00
+#   cV c0: 1.9287905700e+05
+#   cV sigma log10: 3.7494200000e-01
+#
+# Host NFW parameters kept fixed:
+#   gMW_TOT_RSCALE = 20.0 kpc
+#   gMW_RMAX       = 220 kpc
+#   rho0_host_old  = 9.0400000000e+06 Msun/kpc^3
+#
+# Renormalization summary:
+#   N_expected_from_SHVF        = 7.7884185657e+07
+#   mean individual M_sub       = 9.1054202638e+01 Msun
+#   M_smooth_old(<R_match)      = 1.4252163756e+12 Msun
+#   M_sub_expected              = 7.0916824231e+09 Msun
+#   M_smooth_new(<R_match)      = 1.4181246932e+12 Msun
+#   rho0_host_new               = 8.9950181922e+06 Msun/kpc^3
+#   rho0_rescale_factor         = 9.9502413630e-01
+#   double_counted_fraction     = 4.9758636964e-03
+#   double_counted_percent      = 4.9758636964e-01 %
+#
+# CLUMPY value updated below:
+#   gMW_RHOSOL old = 3.9767947420e-01 GeV/cm^3
+#   gMW_RHOSOL new = 3.9570067534e-01 GeV/cm^3
+#
+# NOTE:
+#   This is a template. For production runs, another script may overwrite
+#   gLIST_HALOES and gSIM_OUTPUT_DIR for each realization/run stage.
+#
+
+# Variable name                         Unit           Value             (Format)          (Comment)
+
+#------------------------------------------------------------------------------
+# Cosmological parameters
+#------------------------------------------------------------------------------
+gCOSMO_DELTA0                           [-]            200               <float>           Overdensity factor at z=0;-1 for kBRYANNORMAN98
+gCOSMO_FLAG_DELTA_REF                   [-]            kRHO_CRIT         <string>          Reference density of the overdensity factor
+
+#------------------------------------------------------------------------------
+# Dark Matter global parameters
+#------------------------------------------------------------------------------
+gDM_LOGCDELTA_STDDEV                    [-]            0                 <float>           log-std. deviation of subhalo scattering
+gDM_RHOSAT                              [Msol/kpc^3]   1e+19             <float>           Dark Matter saturation density
+gDM_SUBS_MMIN                           [Msol]         1e-06             <float>           Smallest subclump mass
+gDM_SUBS_MMAXFRAC                       [-]            0.01              <float>           Biggest subclump mass, fraction of host mass
+gDM_SUBS_NUMBEROFLEVELS                 [-]            1                 <integer>         Number of multilevel substructures
+
+#------------------------------------------------------------------------------
+# Milky-Way DM total and clump parameters (see profiles.h and clumps.h)
+#------------------------------------------------------------------------------
+gMW_TOT_FLAG_PROFILE                    [-]            kZHAO             <string>          Profile of total Galactic DM halo
+gMW_TOT_SHAPE_PARAMS_0                  [-]            1                 <float>           Shape parameter 1 of total Gal. DM halo profile
+gMW_TOT_SHAPE_PARAMS_1                  [-]            3                 <float>           Shape parameter 2 of total Gal. DM halo profile
+gMW_TOT_SHAPE_PARAMS_2                  [-]            1                 <float>           Shape parameter 3 of total Gal. DM halo profile
+gMW_TOT_RSCALE                          [kpc]          20.0              <float>           Scale radius of total Dark Matter halo profile
+gMW_RMAX                                [kpc]          220               <float>           Virial radius of Dark Matter halo
+gMW_RSOL                                [kpc]          8.5               <float>           Sun's distance from the Gal. center
+gMW_RHOSOL                              [GeV/cm3]      3.9570067534e-01      <float>           Local Dark Matter density; renormalized for hydro_fragile, Vmax=[0.1,120] km/s
+gMW_TRIAXIAL_IS                         [-]            0                 <boolean (0/1)>   Triaxial halo (True/False)
+gMW_SUBS_FLAG_PROFILE                   [-]            kHOST             <string>          Halo profile of subclumps
+gMW_SUBS_SHAPE_PARAMS_0                 [-]            kHOST             <float or kHOST>  Shape parameter 1 of subclumps halo profile
+gMW_SUBS_SHAPE_PARAMS_1                 [-]            kHOST             <float or kHOST>  Shape parameter 2 of subclumps halo profile
+gMW_SUBS_SHAPE_PARAMS_2                 [-]            kHOST             <float or kHOST>  Shape parameter 3 of subclumps halo profile
+gMW_SUBS_FLAG_CDELTAMDELTA              [-]            kMOLINE17_200     <string>          Mass-concentration model of subclumps
+gMW_SUBS_DPDV_FLAG_PROFILE              [-]            kHOST             <string>          dP/dV profile of subhalo distribution in host
+gMW_SUBS_DPDV_SHAPE_PARAMS_0            [-]            0.68              <float or kHOST>  Shape parameter 1 of dP/dV distrib. profile
+gMW_SUBS_DPDV_SHAPE_PARAMS_1            [-]            kHOST             <float or kHOST>  Shape parameter 2 of dP/dV distrib. profile
+gMW_SUBS_DPDV_SHAPE_PARAMS_2            [-]            kHOST             <float or kHOST>  Shape parameter 3 of dP/dV distrib. profile
+gMW_SUBS_DPDV_RSCALE_TO_RS_HOST         [-]            13.14399          <float>           Scale radius of dP/dV profile to r_s of host
+gMW_SUBS_DPDM_SLOPE                     [-]            1.9               <float>           Slope of power-law subhalo mass spectrum dP/dM
+gMW_SUBS_M1                             [Msol]         1e+08             <float>           Mass m1
+gMW_SUBS_M2                             [Msol]         1e+10             <float>           Mass m2
+gMW_SUBS_N_INM1M2                       [-]            0                 <integer>         # of subclumps with masses between m1 and m2
+
+#------------------------------------------------------------------------------
+# External lists with specified objects to add to simulations
+#------------------------------------------------------------------------------
+gLIST_HALOES                            [-]            /home/jujuba/Desktop/Auriga/CLUMPY_scripts/subhalo_lists_raw/load_custom_nopointlike_fragile_V05.txt  <string or -1>    List of external halos definitions
+
+#------------------------------------------------------------------------------
+# Universal sub-clustering properties for CLUMPY-defined external haloes,
+# separated into DSPH, GALAXY (but not our Galaxy!), and CLUSTER-like objects.
+#------------------------------------------------------------------------------
+gDSPH_SUBS_FLAG_PROFILE                 [-]            kHOST             <string>          Halo profile of subclumps
+gDSPH_SUBS_SHAPE_PARAMS_0               [-]            kHOST             <float or kHOST>  Shape parameter 1 of subclumps halo profile
+gDSPH_SUBS_SHAPE_PARAMS_1               [-]            kHOST             <float or kHOST>  Shape parameter 2 of subclumps halo profile
+gDSPH_SUBS_SHAPE_PARAMS_2               [-]            kHOST             <float or kHOST>  Shape parameter 3 of subclumps halo profile
+gDSPH_SUBS_FLAG_CDELTAMDELTA            [-]            kSANCHEZ14_200    <string>          Mass-concentration model of subclumps
+gDSPH_SUBS_DPDV_FLAG_PROFILE            [-]            kEINASTO          <string>          dP/dV profile of subhalo distribution in host
+gDSPH_SUBS_DPDV_SHAPE_PARAMS_0          [-]            0.68              <float or kHOST>  Shape parameter 1 of dP/dV distrib. profile
+gDSPH_SUBS_DPDV_SHAPE_PARAMS_1          [-]            kHOST             <float or kHOST>  Shape parameter 2 of dP/dV distrib. profile
+gDSPH_SUBS_DPDV_SHAPE_PARAMS_2          [-]            kHOST             <float or kHOST>  Shape parameter 3 of dP/dV distrib. profile
+gDSPH_SUBS_DPDV_RSCALE_TO_RS_HOST       [-]            10                <float>           Scale radius of dP/dV profile to r_s of host
+gDSPH_SUBS_DPDM_SLOPE                   [-]            1.9               <float>           Slope of power-law subhalo mass spectrum dP/dM
+gDSPH_SUBS_MASSFRACTION                 [-]            0.0               <float>           Fraction of host halo mass bound in subhalos
+
+gGALAXY_SUBS_FLAG_PROFILE               [-]            kHOST             <string>          Halo profile of subclumps
+gGALAXY_SUBS_SHAPE_PARAMS_0             [-]            kHOST             <float or kHOST>  Shape parameter 1 of subclumps halo profile
+gGALAXY_SUBS_SHAPE_PARAMS_1             [-]            kHOST             <float or kHOST>  Shape parameter 2 of subclumps halo profile
+gGALAXY_SUBS_SHAPE_PARAMS_2             [-]            kHOST             <float or kHOST>  Shape parameter 3 of subclumps halo profile
+gGALAXY_SUBS_FLAG_CDELTAMDELTA          [-]            kSANCHEZ14_200    <string>          Mass-concentration model of subclumps
+gGALAXY_SUBS_DPDV_FLAG_PROFILE          [-]            kEINASTO          <string>          dP/dV profile of subhalo distribution in host
+gGALAXY_SUBS_DPDV_SHAPE_PARAMS_0        [-]            0.68              <float or kHOST>  Shape parameter 1 of dP/dV distrib. profile
+gGALAXY_SUBS_DPDV_SHAPE_PARAMS_1        [-]            kHOST             <float or kHOST>  Shape parameter 2 of dP/dV distrib. profile
+gGALAXY_SUBS_DPDV_SHAPE_PARAMS_2        [-]            kHOST             <float or kHOST>  Shape parameter 3 of dP/dV distrib. profile
+gGALAXY_SUBS_DPDV_RSCALE_TO_RS_HOST     [-]            10                <float>           Scale radius of dP/dV profile to r_s of host
+gGALAXY_SUBS_DPDM_SLOPE                 [-]            1.9               <float>           Slope of power-law subhalo mass spectrum dP/dM
+gGALAXY_SUBS_MASSFRACTION               [-]            0.0               <float>           Fraction of host halo mass bound in subhalos
+
+gCLUSTER_SUBS_FLAG_PROFILE              [-]            kHOST             <string>          Halo profile of subclumps
+gCLUSTER_SUBS_SHAPE_PARAMS_0            [-]            kHOST             <float or kHOST>  Shape parameter 1 of subclumps halo profile
+gCLUSTER_SUBS_SHAPE_PARAMS_1            [-]            kHOST             <float or kHOST>  Shape parameter 2 of subclumps halo profile
+gCLUSTER_SUBS_SHAPE_PARAMS_2            [-]            kHOST             <float or kHOST>  Shape parameter 3 of subclumps halo profile
+gCLUSTER_SUBS_FLAG_CDELTAMDELTA         [-]            kSANCHEZ14_200    <string>          Mass-concentration model of subclumps
+gCLUSTER_SUBS_DPDV_FLAG_PROFILE         [-]            kEINASTO          <string>          dP/dV profile of subhalo distribution in host
+gCLUSTER_SUBS_DPDV_SHAPE_PARAMS_0       [-]            0.68              <float or kHOST>  Shape parameter 1 of dP/dV distrib. profile
+gCLUSTER_SUBS_DPDV_SHAPE_PARAMS_1       [-]            kHOST             <float or kHOST>  Shape parameter 2 of dP/dV distrib. profile
+gCLUSTER_SUBS_DPDV_SHAPE_PARAMS_2       [-]            kHOST             <float or kHOST>  Shape parameter 3 of dP/dV distrib. profile
+gCLUSTER_SUBS_DPDV_RSCALE_TO_RS_HOST    [-]            10                <float>           Scale radius of dP/dV profile to r_s of host
+gCLUSTER_SUBS_DPDM_SLOPE                [-]            1.9               <float>           Slope of power-law subhalo mass spectrum dP/dM
+gCLUSTER_SUBS_MASSFRACTION              [-]            0.0               <float>           Fraction of host halo mass bound in subhalos
+
+#------------------------------------------------------------------------------
+# Particle physics parameters
+#------------------------------------------------------------------------------
+gPP_BR                                  [-]            0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,    <comma-sep list>  Branching channel ratio
+gPP_FLAG_SPECTRUMMODEL                  [-]            kCIRELLI11_EW     <string>          Spectrum model
+gPP_DM_ANNIHIL_DELTA                    [-]            2                 <integer>         Majorana (2) or Dirac (4) particle
+gPP_DM_ANNIHIL_SIGMAV_CM3PERS           [cm^3/s]       3e-26             <float>           Annihilation cross section
+gPP_DM_IS_ANNIHIL_OR_DECAY              [-]            1                 <boolean (0/1)>   Dark Matter Model (0: Decay, 1: Annihilation)
+gPP_DM_MASS_GEV                         [GeV]          100               <float>           [GeV] dark matter particle mass
+gPP_NUMIXING_CPPHASE_DEG                [deg]          221.4             <float>           Neutrino mixing CP phase
+gPP_NUMIXING_THETA12_DEG                [deg]          33.65             <float>           Neutrino mixing angle 1
+gPP_NUMIXING_THETA13_DEG                [deg]          8.5299999999999   <float>           Neutrino mixing angle 2
+gPP_NUMIXING_THETA23_DEG                [deg]          47.3              <float>           Neutrino mixing angle 3
+
+#------------------------------------------------------------------------------
+# Simulation parameters
+#------------------------------------------------------------------------------
+gSIM_IS_WRITE_FLUXMAPS                  [-]            0                 <boolean (0/1)>   Calculate gamma-ray and/or neutrino fluxes
+gSIM_FLUX_IS_INTEG_OR_DIFF              [-]            1                 <boolean (0/1)>   Flux either differential (0) or integrated (1)
+gSIM_FLUX_EMIN_GEV                      [GeV]          1                 <float>           Lower limit for integrated flux & shown spectrum
+gSIM_FLUX_EMAX_GEV                      [GeV]          99                <float>           Upper limit for integrated flux & shown spectrum
+gSIM_FLUX_FLAG_NUFLAVOUR                [-]            kNUMU             <string>          Considered neutrino flavour
+gSIM_GAUSSBEAM_GAMMA_FWHM_DEG           [deg]          -1                <float or -1>     FWHM of Gaussian beam of gamma-ray telescope
+gSIM_GAUSSBEAM_NEUTRINO_FWHM_DEG        [deg]          -1                <float or -1>     FWHM of Gaussian beam of neutrino telescope
+gSIM_HEALPIX_NSIDE                      [-]            1024              <integer or -1>   Resolution parameter for HEALPix
+gSIM_ALPHAINT_DEG                       [deg]          -1              <float>           Spatial J-factor integration angle
+gSIM_IS_ASTRO_OR_PP_UNITS               [-]            0                 <boolean (0/1)>   Output units [Msol]&[kpc] (1) or [GeV]&[cm] (0)
+gSIM_PSI_OBS_DEG                        [deg]          0                 <float>           Galactic long. coordinate of FOV center
+gSIM_THETA_OBS_DEG                      [deg]          s                 <float or 's'>    Galactic lat. coordinate of FOV center
+gSIM_THETA_ORTH_SIZE_DEG                [deg]          360               <float or 'd'>    Grid diameter in theta_orth-dir.
+gSIM_THETA_SIZE_DEG                     [deg]          180               <float>           Grid diameter in theta-dir.
+gSIM_EPS                                [-]            0.01              <float>           Numeric precision of the simulation
+gSIM_IS_WRITE_GALPOWERSPECTRUM          [-]            0                 <boolean (0/1)>   Write angular power spectrum of DM skymap
+gSIM_IS_WRITE_ROOTFILES                 [-]            0                 <boolean (0/1)>   Write output additionally in ROOT format
+gSIM_OUTPUT_DIR                         [-]            /home/jujuba/Desktop/Auriga/CLUMPY_scripts/clumpy_outputs/raw/no_poinlike_fragile_V05   <string or -1>    Output directory (absolute or relative)

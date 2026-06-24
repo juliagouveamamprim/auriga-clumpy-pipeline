@@ -1,0 +1,17 @@
+name: auriga-clumpy
+
+channels:
+  - conda-forge
+  - nodefaults
+
+dependencies:
+  - python>=3.10,<3.13
+  - numpy
+  - scipy
+  - pandas
+  - h5py
+  - pyyaml
+  - astropy
+  - healpy
+  - matplotlib
+  - psutil
