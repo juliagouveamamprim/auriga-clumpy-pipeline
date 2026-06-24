@@ -2,8 +2,6 @@
 
 Pipeline for generating Auriga-inspired Galactic subhalo repopulations and complete full-sky dark-matter annihilation J-factor maps.
 
-The workflow separates extended and pointlike subhalos, renders the extended component with CLUMPY, applies a halo-by-halo normalization correction, and combines all components into a final HEALPix map.
-
 ## Overview
 
 For each independent repopulation and hydro scenario, the pipeline:
@@ -18,45 +16,6 @@ For each independent repopulation and hydro scenario, the pipeline:
 8. Reruns CLUMPY using the corrected list.
 9. Combines the corrected CLUMPY map with the pointlike map.
 10. Optionally produces Mollweide plots of all components.
-
-Supported hydro scenarios:
-
-- `resilient`
-- `fragile`
-
-## Pipeline workflow
-
-```text
-Auriga repopulation
-        |
-        v
-10-column HDF5 catalog
-        |
-        v
-extended / pointlike separation
-        |
-        +------------------------------+
-        |                              |
-        v                              v
-extended CLUMPY list           pointlike HEALPix FITS
-        |                              |
-        v                              |
-raw CLUMPY run                         |
-        |                              |
-        v                              |
-halo-by-halo rho_s correction          |
-        |                              |
-        v                              |
-corrected CLUMPY run                   |
-        |                              |
-        +--------------+---------------+
-                       |
-                       v
-                 total FITS
-                       |
-                       v
-             optional HEALPix plots
-```
 
 ## HDF5 catalogs
 
@@ -90,14 +49,12 @@ The current HDF5 table contains ten columns:
 | `D_Earth` | kpc | Distance from the observer |
 | `Vmax` | km s⁻¹ | Maximum circular velocity |
 | `theta_s` | deg | Angular scale radius |
-| `Cv` | dimensionless | Concentration-related quantity |
+| `Cv` | dimensionless | Concentration |
 | `r_s` | kpc | NFW scale radius |
 | `rho_s` | M☉ kpc⁻³ | NFW scale density |
 | `Xearth` | kpc | Earth-centered Galactic Cartesian coordinate |
 | `Yearth` | kpc | Earth-centered Galactic Cartesian coordinate |
 | `Zearth` | kpc | Earth-centered Galactic Cartesian coordinate |
-
-Galactocentric coordinates may still be used internally, but are not stored in the final table.
 
 Before storage, invalid objects are removed, including Earth-engulfing and Roche-disrupted subhalos. The surviving catalog is sorted by decreasing `Js`.
 
@@ -128,7 +85,7 @@ extended:  theta_s >= 0.06 deg
 pointlike: theta_s <  0.06 deg
 ```
 
-Both components are generated during the same chunked pass through the HDF5 catalog. This prevents overlaps, missing halos, or inconsistent cuts.
+Both components are generated during the same chunked pass through the HDF5 catalog. 
 
 ### Extended component
 
