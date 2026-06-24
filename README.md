@@ -288,6 +288,7 @@ Jpointlike_per_sr
 │   ├── generate_clumpy_params.py
 │   ├── plot_healpix_components.py
 │   ├── prepare_subhalo_components.py
+│   ├── run_clumpy_batch.sh
 │   ├── run_clumpy_one_case.sh
 │   └── run_repopulation.py
 ├── src/
@@ -376,6 +377,30 @@ The wrapper performs seven sequential steps:
 7. Combine the corrected and pointlike maps.
 
 Independent repopulations may run in parallel, but the internal steps for one case must remain sequential.
+
+### Run a batch of CLUMPY cases
+
+Run one scenario over an inclusive interval:
+
+```bash
+bash scripts/run_clumpy_batch.sh 160 179 resilient 8
+```
+
+Run both hydro scenarios:
+
+```bash
+bash scripts/run_clumpy_batch.sh 160 179 both 8
+```
+
+The arguments are:
+
+```text
+start_id  end_id  resilient|fragile|both  max_jobs
+```
+
+The wrapper verifies all required HDF5 catalogs before launching jobs, writes one log per case, and skips cases whose final total FITS already exists.
+
+When `both` is selected, `max_jobs` is the total number of simultaneous cases across both scenarios.
 
 ### Plot the components
 
