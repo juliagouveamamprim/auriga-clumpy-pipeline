@@ -296,7 +296,9 @@ Jpointlike_per_sr
 └── tests/
     ├── test_build_table.py
     ├── test_combine_clumpy_pointlike.py
-    └── test_prepare_subhalo_components.py
+    ├── test_nside_path_names.py
+    ├── test_prepare_subhalo_components.py
+    └── test_prepare_subhalo_components_cuts.py
 ```
 
 Generated catalogs, parameter files, logs, FITS maps, and plots are stored under `outputs/` and excluded from version control.
@@ -353,6 +355,28 @@ export CLUMPY_EXECUTABLE=/path/to/clumpy_wrapper
 If this variable is not set, the wrapper searches for `clumpy` in the current `PATH`.
 
 The executable must produce the patched halo-rendered log.
+
+### NSIDE and optional subhalo cuts
+
+The CLUMPY wrappers accept the HEALPix resolution through the `NSIDE` environment variable. If `NSIDE` is not set, the default is `1024`.
+
+The default `NSIDE=1024` keeps the historical filenames, for example `repop_XXXX_raw_nopointlike.txt`, `repop_XXXX_rhocorr.txt`, and `auriga_total_nside1024.fits`.
+
+For non-default resolutions, intermediate CLUMPY lists and CLUMPY output directories include the `NSIDE` value to avoid overwriting default products. For example: `repop_XXXX_raw_nopointlike_nside2048.txt`, `repop_XXXX_rhocorr_nside2048.txt`, `outputs/raw_clumpy/repop_XXXX_nside2048/`, `outputs/corrected_clumpy/repop_XXXX_nside2048/`, and `auriga_total_nside2048.fits`.
+
+The pointlike FITS map always includes `NSIDE` in the filename: `repop_XXXX_pointlike_nside<NSIDE>.fits`.
+
+The extended/pointlike split is derived from the chosen `NSIDE`: `theta_pix_deg = healpix_pixel_size_deg(NSIDE)`, `theta_min_deg = round_up(theta_pix_deg)`, extended means `theta_s >= theta_min_deg`, and pointlike means `theta_s < theta_min_deg`.
+
+Optional cuts can be enabled, for example:
+
+```bash
+EXTENDED_CUT_F=1e-3 POINTLIKE_CUT_F=1e-4 THETA_APERTURE_DEG=0.03 bash scripts/run_clumpy_one_case.sh 230 resilient
+```
+
+The cut logic uses the same proxies as the diagnostics: pointlike uses `Js`, extended uses `J_theta(theta_aperture)`, and `Jref = max(max Js pointlike, max J_theta extended)`.
+
+If no cut variables are set, no subhalo cuts are applied.
 
 ### Run one complete case
 
@@ -420,7 +444,13 @@ The plotted quantity is `log10(J / sr)`.
 
 ## Tests
 
-The repository includes lightweight synthetic tests:
+Run the pytest-based tests with:
+
+```bash
+python3 -m pytest tests -vv
+```
+
+Additional script-style tests can also be run directly:
 
 ```bash
 python3 tests/test_build_table.py
@@ -428,13 +458,15 @@ python3 tests/test_prepare_subhalo_components.py
 python3 tests/test_combine_clumpy_pointlike.py
 ```
 
-They verify:
+The tests verify:
 
 - the reduced ten-column HDF5 schema;
 - catalog filtering, ordering, coordinates, and metadata;
 - complementary extended/pointlike classification;
+- optional extended and pointlike cuts;
 - conservation of the pointlike J-factor;
 - NESTED pixel placement;
+- NSIDE-dependent path names while preserving historical default names;
 - consistency between integrated and per-sr maps;
 - map combination without double counting;
 - preservation of all map components.

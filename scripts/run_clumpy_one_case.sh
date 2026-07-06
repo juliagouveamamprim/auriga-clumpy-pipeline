@@ -61,6 +61,27 @@ BASE_RUN_DIR="${REPOSITORY_ROOT}/outputs/clumpy"
 # Set CLUMPY_EXECUTABLE to the CLUMPY binary or wrapper.
 # The executable must produce the patched *.halo_rendered.log output.
 CLUMPY="${CLUMPY_EXECUTABLE:-clumpy}"
+PYTHON="${PYTHON_EXECUTABLE:-python3}"
+
+DEFAULT_NSIDE=1024
+NSIDE="${NSIDE:-${DEFAULT_NSIDE}}"
+
+EXTENDED_CUT_F="${EXTENDED_CUT_F:-}"
+POINTLIKE_CUT_F="${POINTLIKE_CUT_F:-}"
+THETA_APERTURE_DEG="${THETA_APERTURE_DEG:-}"
+
+if ! [[ "${NSIDE}" =~ ^[0-9]+$ ]] || (( NSIDE < 1 || (NSIDE & (NSIDE - 1)) != 0 )); then
+    echo "ERROR: NSIDE must be a positive power of two."
+    exit 1
+fi
+
+NSIDE_SUFFIX=""
+if (( NSIDE != DEFAULT_NSIDE )); then
+    NSIDE_SUFFIX="_nside${NSIDE}"
+fi
+
+REPOP_RUN_TAG="${REPOP_TAG}${NSIDE_SUFFIX}"
+CLUMPY_BASENAME="annihil_gal2D_LOS0_0_FOV360x180_nside${NSIDE}"
 
 if ! command -v "$CLUMPY" >/dev/null 2>&1; then
     echo "ERROR: CLUMPY executable not found:"
@@ -73,21 +94,21 @@ fi
 
 CASE_DIR="${BASE_RUN_DIR}/${SCENARIO}"
 
-RAW_PARAM="${CASE_DIR}/params/generated/${REPOP_TAG}_raw_params.txt"
-CORRECTED_PARAM="${CASE_DIR}/params/generated/${REPOP_TAG}_corrected_params.txt"
+RAW_PARAM="${CASE_DIR}/params/generated/${REPOP_TAG}_raw_params${NSIDE_SUFFIX}.txt"
+CORRECTED_PARAM="${CASE_DIR}/params/generated/${REPOP_TAG}_corrected_params${NSIDE_SUFFIX}.txt"
 
-RAW_CLUMPY_LOG="${CASE_DIR}/logs/raw_clumpy/${REPOP_TAG}_raw_clumpy.log"
-CORRECTED_CLUMPY_LOG="${CASE_DIR}/logs/corrected_clumpy/${REPOP_TAG}_corrected_clumpy.log"
+RAW_CLUMPY_LOG="${CASE_DIR}/logs/raw_clumpy/${REPOP_TAG}_raw_clumpy${NSIDE_SUFFIX}.log"
+CORRECTED_CLUMPY_LOG="${CASE_DIR}/logs/corrected_clumpy/${REPOP_TAG}_corrected_clumpy${NSIDE_SUFFIX}.log"
 
-RAW_OUTPUT_DIR="${CASE_DIR}/outputs/raw_clumpy/${REPOP_TAG}"
-CORRECTED_OUTPUT_DIR="${CASE_DIR}/outputs/corrected_clumpy/${REPOP_TAG}"
+RAW_OUTPUT_DIR="${CASE_DIR}/outputs/raw_clumpy/${REPOP_RUN_TAG}"
+CORRECTED_OUTPUT_DIR="${CASE_DIR}/outputs/corrected_clumpy/${REPOP_RUN_TAG}"
 
-RAW_RENDERED_LOG="${RAW_OUTPUT_DIR}/annihil_gal2D_LOS0_0_FOV360x180_nside1024.halo_rendered.log"
-CORRECTED_RENDERED_LOG="${CORRECTED_OUTPUT_DIR}/annihil_gal2D_LOS0_0_FOV360x180_nside1024.halo_rendered.log"
+RAW_RENDERED_LOG="${RAW_OUTPUT_DIR}/${CLUMPY_BASENAME}.halo_rendered.log"
+CORRECTED_RENDERED_LOG="${CORRECTED_OUTPUT_DIR}/${CLUMPY_BASENAME}.halo_rendered.log"
 
-FINAL_FITS="${CORRECTED_OUTPUT_DIR}/annihil_gal2D_LOS0_0_FOV360x180_nside1024.fits"
+FINAL_FITS="${CORRECTED_OUTPUT_DIR}/${CLUMPY_BASENAME}.fits"
 TOTAL_OUTPUT_DIR="${CASE_DIR}/outputs/total/${REPOP_TAG}"
-TOTAL_FITS="${TOTAL_OUTPUT_DIR}/auriga_total_nside1024.fits"
+TOTAL_FITS="${TOTAL_OUTPUT_DIR}/auriga_total_nside${NSIDE}.fits"
 
 echo
 echo "======================================================================"
@@ -96,6 +117,12 @@ echo "======================================================================"
 echo "REPOP_ID:  ${REPOP_ID}"
 echo "REPOP_TAG: ${REPOP_TAG}"
 echo "SCENARIO:  ${SCENARIO}"
+echo "NSIDE:     ${NSIDE}"
+echo "Run tag:   ${REPOP_RUN_TAG}"
+echo "Cuts:"
+echo "  EXTENDED_CUT_F:      ${EXTENDED_CUT_F:-none}"
+echo "  POINTLIKE_CUT_F:     ${POINTLIKE_CUT_F:-none}"
+echo "  THETA_APERTURE_DEG:  ${THETA_APERTURE_DEG:-default}"
 echo "Time:      $(date)"
 echo "======================================================================"
 echo
@@ -117,11 +144,28 @@ echo "----------------------------------------------------------------------"
 echo "Step 1/7: prepare extended list and pointlike HEALPix map"
 echo "----------------------------------------------------------------------"
 
-python3 "${SCRIPTS_DIR}/prepare_subhalo_components.py" \
-    "${REPOP_ID}" "${SCENARIO}"
+PREPARE_ARGS=(
+    "${REPOP_ID}"
+    "${SCENARIO}"
+    "--nside" "${NSIDE}"
+)
 
-RAW_LIST="${CASE_DIR}/lists/raw/${REPOP_TAG}_raw_nopointlike.txt"
-POINTLIKE_FITS="${CASE_DIR}/pointlike/${REPOP_TAG}_pointlike_nside1024.fits"
+if [ -n "${EXTENDED_CUT_F}" ]; then
+    PREPARE_ARGS+=("--extended-cut-f" "${EXTENDED_CUT_F}")
+fi
+
+if [ -n "${POINTLIKE_CUT_F}" ]; then
+    PREPARE_ARGS+=("--pointlike-cut-f" "${POINTLIKE_CUT_F}")
+fi
+
+if [ -n "${THETA_APERTURE_DEG}" ]; then
+    PREPARE_ARGS+=("--theta-aperture-deg" "${THETA_APERTURE_DEG}")
+fi
+
+"${PYTHON}" "${SCRIPTS_DIR}/prepare_subhalo_components.py" "${PREPARE_ARGS[@]}"
+
+RAW_LIST="${CASE_DIR}/lists/raw/${REPOP_TAG}_raw_nopointlike${NSIDE_SUFFIX}.txt"
+POINTLIKE_FITS="${CASE_DIR}/pointlike/${REPOP_TAG}_pointlike_nside${NSIDE}.fits"
 
 if [ ! -f "$RAW_LIST" ]; then
     echo "ERROR: raw CLUMPY list was not created:"
@@ -144,8 +188,8 @@ echo "----------------------------------------------------------------------"
 echo "Step 2/7: generate raw CLUMPY parameter file"
 echo "----------------------------------------------------------------------"
 
-python3 "${SCRIPTS_DIR}/generate_clumpy_params.py" \
-    "${REPOP_ID}" "${SCENARIO}" raw
+"${PYTHON}" "${SCRIPTS_DIR}/generate_clumpy_params.py" \
+    "${REPOP_ID}" "${SCENARIO}" raw --nside "${NSIDE}"
 
 if [ ! -f "$RAW_PARAM" ]; then
     echo "ERROR: raw parameter file was not created:"
@@ -182,10 +226,10 @@ echo "----------------------------------------------------------------------"
 echo "Step 4/7: correct rho_s from raw CLUMPY rendered log"
 echo "----------------------------------------------------------------------"
 
-python3 "${SCRIPTS_DIR}/correct_rhos_from_clumpy_raw.py" \
-    "${REPOP_ID}" "${SCENARIO}"
+"${PYTHON}" "${SCRIPTS_DIR}/correct_rhos_from_clumpy_raw.py" \
+    "${REPOP_ID}" "${SCENARIO}" --nside "${NSIDE}"
 
-CORRECTED_LIST="${CASE_DIR}/lists/corrected/${REPOP_TAG}_rhocorr.txt"
+CORRECTED_LIST="${CASE_DIR}/lists/corrected/${REPOP_TAG}_rhocorr${NSIDE_SUFFIX}.txt"
 
 if [ ! -f "$CORRECTED_LIST" ]; then
     echo "ERROR: corrected list was not created:"
@@ -202,8 +246,8 @@ echo "----------------------------------------------------------------------"
 echo "Step 5/7: generate corrected CLUMPY parameter file"
 echo "----------------------------------------------------------------------"
 
-python3 "${SCRIPTS_DIR}/generate_clumpy_params.py" \
-    "${REPOP_ID}" "${SCENARIO}" corrected
+"${PYTHON}" "${SCRIPTS_DIR}/generate_clumpy_params.py" \
+    "${REPOP_ID}" "${SCENARIO}" corrected --nside "${NSIDE}"
 
 if [ ! -f "$CORRECTED_PARAM" ]; then
     echo "ERROR: corrected parameter file was not created:"
@@ -246,8 +290,8 @@ echo "----------------------------------------------------------------------"
 echo "Step 7/7: combine corrected CLUMPY and pointlike FITS"
 echo "----------------------------------------------------------------------"
 
-python3 "${SCRIPTS_DIR}/combine_clumpy_pointlike.py" \
-    "${REPOP_ID}" "${SCENARIO}"
+"${PYTHON}" "${SCRIPTS_DIR}/combine_clumpy_pointlike.py" \
+    "${REPOP_ID}" "${SCENARIO}" --nside "${NSIDE}"
 
 if [ ! -f "$TOTAL_FITS" ] || [ ! -s "$TOTAL_FITS" ]; then
     echo "ERROR: total FITS was not created or is empty:"
