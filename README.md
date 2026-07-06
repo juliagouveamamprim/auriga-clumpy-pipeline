@@ -503,6 +503,4 @@ LICENSE
 
 ## Status
 
-Version 2.0 is under active development and validation.
-
-The established production pipeline and its existing outputs remain separate while this portable implementation is tested.
+This version of the pipeline is under active development and validation.
