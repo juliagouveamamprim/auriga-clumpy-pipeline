@@ -128,6 +128,49 @@ def parse_args():
         help="Hydro scenario to process.",
     )
 
+    parser.add_argument(
+        "--nside",
+        type=int,
+        default=NSIDE,
+        help=(
+            "HEALPix NSIDE used for the pointlike map and for the "
+            "automatic pointlike/extended angular threshold."
+        ),
+    )
+
+    parser.add_argument(
+        "--extended-cut-f",
+        type=float,
+        default=None,
+        help=(
+            "Optional cut fraction for extended halos. If provided, "
+            "extended halos are kept only when J_theta(theta_aperture) "
+            ">= extended_cut_f * J_pixel_ref."
+        ),
+    )
+
+    parser.add_argument(
+        "--pointlike-cut-f",
+        type=float,
+        default=None,
+        help=(
+            "Optional cut fraction for pointlike halos. If provided, "
+            "pointlike halos are kept only when Js >= pointlike_cut_f "
+            "* J_pixel_ref."
+        ),
+    )
+
+    parser.add_argument(
+        "--theta-aperture-deg",
+        type=float,
+        default=None,
+        help=(
+            "Aperture angle used to estimate the central-pixel proxy "
+            "J_theta for extended halos. If omitted and cuts are enabled, "
+            "defaults to half the pointlike/extended threshold."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -153,14 +196,22 @@ def get_input_h5(repop_id, scenario):
     return get_h5_dir(repop_id) / f"fullrepop_hydro_{scenario}.h5"
 
 
-def get_output_list(repop_id, scenario, top_n):
+def get_output_list(repop_id, scenario, top_n, nside=NSIDE):
     """
     Return output CLUMPY raw list path.
+
+    The default NSIDE keeps the historical filename. Non-default NSIDE values
+    are included to avoid overwriting lists made with a different angular cut.
     """
-    if top_n is None:
-        filename = f"repop_{repop_id:04d}_raw_nopointlike.txt"
-    else:
-        filename = f"repop_{repop_id:04d}_raw_nopointlike_top{top_n}.txt"
+    base = f"repop_{repop_id:04d}_raw_nopointlike"
+
+    if nside != NSIDE:
+        base += f"_nside{nside}"
+
+    if top_n is not None:
+        base += f"_top{top_n}"
+
+    filename = base + ".txt"
 
     return (
         BASE_RUN_DIR
@@ -257,6 +308,7 @@ def write_header(
     chunk_size,
     halo_type,
     top_n,
+    cut_metadata=None,
 ):
     """
     Write CLUMPY list header.
@@ -295,6 +347,31 @@ def write_header(
         "#************************************************************************************************************",
         "# Name           Type      l[deg]      b[deg]      d[kpc]   z      Rdelta[kpc]   rhos[Msun/kpc3]   rs[kpc]   prof.   #1   #2   #3",
     ]
+
+    if cut_metadata is None:
+        header.extend(
+            [
+                "# Subhalo cuts: disabled",
+                "#",
+            ]
+        )
+    else:
+        header.extend(
+            [
+                "# Subhalo cuts: enabled",
+                f"# theta_aperture_deg = {cut_metadata['theta_aperture_deg']:.8e}",
+                f"# brightest_pointlike_pixel_theory = {cut_metadata['brightest_pointlike']:.8e}",
+                f"# brightest_extended_pixel_theory = {cut_metadata['brightest_extended']:.8e}",
+                f"# J_pixel_ref = {cut_metadata['j_pixel_ref']:.8e}",
+                f"# extended_cut_f = {cut_metadata['extended_cut_f']}",
+                f"# pointlike_cut_f = {cut_metadata['pointlike_cut_f']}",
+                f"# extended_J_cut = {cut_metadata['extended_j_cut']}",
+                f"# pointlike_J_cut = {cut_metadata['pointlike_j_cut']}",
+                "# Extended cut: keep if J_theta(theta_aperture) >= extended_J_cut",
+                "# Pointlike cut: keep if Js >= pointlike_J_cut",
+                "#",
+            ]
+        )
 
     for line in header:
         f.write(line + "\n")
@@ -365,6 +442,8 @@ def write_pointlike_fits(
     repop_id,
     theta_cut_deg,
     n_pointlike,
+    n_pointlike_total=None,
+    cut_metadata=None,
 ):
     """Write the pointlike component as a CLUMPY-compatible HEALPix FITS."""
 
@@ -433,7 +512,7 @@ def write_pointlike_fits(
         hdu.header["LASTPIX"] = npix - 1
         hdu.header["INDXSCHM"] = "EXPLICIT"
         hdu.header["COORDSYS"] = "G"
-        hdu.header["OBJECT"] = "FULLSKY"
+        hdu.header["OBJECT"] = "PARTIAL"
         hdu.header["SCENARIO"] = scenario
         hdu.header["REPOPID"] = repop_id
         hdu.header["THETACUT"] = (
@@ -442,8 +521,51 @@ def write_pointlike_fits(
         )
         hdu.header["NPOINT"] = (
             n_pointlike,
-            "Number of pointlike subhalos",
+            "Number of pointlike subhalos in this map",
         )
+        if n_pointlike_total is not None:
+            hdu.header["NPTOTAL"] = (
+                n_pointlike_total,
+                "Number of pointlike subhalos before cuts",
+            )
+        if cut_metadata is None:
+            hdu.header["CUTS"] = (False, "Subhalo cuts applied")
+        else:
+            hdu.header["CUTS"] = (True, "Subhalo cuts applied")
+            hdu.header["THETAAP"] = (
+                float(cut_metadata["theta_aperture_deg"]),
+                "Aperture used for Jtheta [deg]",
+            )
+            hdu.header["JREF"] = (
+                float(cut_metadata["j_pixel_ref"]),
+                "Brightest theoretical pixel reference",
+            )
+            if cut_metadata["pointlike_cut_f"] is not None:
+                hdu.header["FPL"] = (
+                    float(cut_metadata["pointlike_cut_f"]),
+                    "Pointlike cut fraction",
+                )
+                hdu.header["JCPL"] = (
+                    float(cut_metadata["pointlike_j_cut"]),
+                    "Pointlike J cut",
+                )
+            if cut_metadata["extended_cut_f"] is not None:
+                hdu.header["FEXT"] = (
+                    float(cut_metadata["extended_cut_f"]),
+                    "Extended cut fraction",
+                )
+                hdu.header["JCEXT"] = (
+                    float(cut_metadata["extended_j_cut"]),
+                    "Extended Jtheta cut",
+                )
+            hdu.header["BPL"] = (
+                float(cut_metadata["brightest_pointlike"]),
+                "Brightest pointlike proxy",
+            )
+            hdu.header["BEXT"] = (
+                float(cut_metadata["brightest_extended"]),
+                "Brightest extended proxy",
+            )
         hdu.header["PIXAREA"] = (
             pixel_area_sr,
             "HEALPix pixel solid angle [sr]",
@@ -459,6 +581,133 @@ def write_pointlike_fits(
             hdu_per_sr,
         ]
     ).writeto(output_path, overwrite=True)
+
+
+
+def jtheta_from_js(js, d_earth_kpc, rs_kpc, theta_aperture_deg):
+    """
+    Estimate the theoretical central-pixel J contribution for an NFW halo.
+
+    The HDF5 stores Js integrated up to r_s. For the NFW radial factor used
+    in the diagnostics:
+
+        Js = J_general * (7 / 8)
+
+    and
+
+        J_theta = Js * radial_factor(theta) / (7 / 8)
+
+    with radial_factor(theta) = 1 - 1 / (1 + D tan(theta) / r_s)^3.
+    """
+
+    theta_rad = np.deg2rad(theta_aperture_deg)
+
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        x = d_earth_kpc * np.tan(theta_rad) / rs_kpc
+        radial_factor = 1.0 - 1.0 / (1.0 + x) ** 3
+        jtheta = js * radial_factor / (7.0 / 8.0)
+
+    jtheta = np.asarray(jtheta, dtype=np.float64)
+    jtheta[~np.isfinite(jtheta)] = 0.0
+    jtheta[jtheta < 0.0] = 0.0
+
+    return jtheta
+
+
+def build_valid_mask(js, d_earth, theta_s, r_s, rho_s, x_e, y_e, z_e):
+    """Return the validity mask used consistently in both HDF5 passes."""
+
+    radius = np.sqrt(x_e**2 + y_e**2 + z_e**2)
+
+    return (
+        np.isfinite(js)
+        & np.isfinite(d_earth)
+        & np.isfinite(theta_s)
+        & np.isfinite(r_s)
+        & np.isfinite(rho_s)
+        & np.isfinite(x_e)
+        & np.isfinite(y_e)
+        & np.isfinite(z_e)
+        & np.isfinite(radius)
+        & (js > 0.0)
+        & (d_earth > 0.0)
+        & (r_s > 0.0)
+        & (rho_s > 0.0)
+        & (radius > 0.0)
+    )
+
+
+def compute_pixel_reference(
+    data,
+    column_indices,
+    n_total,
+    theta_min_deg,
+    theta_aperture_deg,
+    chunk_size,
+):
+    """
+    Compute the diagnostic-inspired brightest theoretical pixel reference.
+
+    Pointlike halos enter with J_pixel_proxy = Js.
+    Extended halos enter with J_pixel_proxy = J_theta(theta_aperture).
+    """
+
+    brightest_pointlike = 0.0
+    brightest_extended = 0.0
+
+    for start_row in range(0, n_total, chunk_size):
+        end_row = min(start_row + chunk_size, n_total)
+        arr = data[start_row:end_row]
+
+        js = arr[:, column_indices["Js"]]
+        d_earth = arr[:, column_indices["D_Earth"]]
+        theta_s = arr[:, column_indices["theta_s"]]
+        r_s = arr[:, column_indices["r_s"]]
+        rho_s = arr[:, column_indices["rho_s"]]
+        x_e = arr[:, column_indices["Xearth"]]
+        y_e = arr[:, column_indices["Yearth"]]
+        z_e = arr[:, column_indices["Zearth"]]
+
+        valid = build_valid_mask(
+            js=js,
+            d_earth=d_earth,
+            theta_s=theta_s,
+            r_s=r_s,
+            rho_s=rho_s,
+            x_e=x_e,
+            y_e=y_e,
+            z_e=z_e,
+        )
+
+        mask_pointlike = valid & (theta_s < theta_min_deg)
+        mask_extended = valid & (theta_s >= theta_min_deg)
+
+        if np.any(mask_pointlike):
+            local_max = float(np.nanmax(js[mask_pointlike]))
+            brightest_pointlike = max(brightest_pointlike, local_max)
+
+        if np.any(mask_extended):
+            ext_jtheta = jtheta_from_js(
+                js=js[mask_extended],
+                d_earth_kpc=d_earth[mask_extended],
+                rs_kpc=r_s[mask_extended],
+                theta_aperture_deg=theta_aperture_deg,
+            )
+            local_max = float(np.nanmax(ext_jtheta))
+            brightest_extended = max(brightest_extended, local_max)
+
+    j_pixel_ref = max(brightest_pointlike, brightest_extended)
+
+    if not np.isfinite(j_pixel_ref) or j_pixel_ref <= 0.0:
+        raise RuntimeError(
+            "Could not compute a positive J_pixel_ref for subhalo cuts."
+        )
+
+    return {
+        "brightest_pointlike": brightest_pointlike,
+        "brightest_extended": brightest_extended,
+        "j_pixel_ref": j_pixel_ref,
+    }
 
 
 # ============================================================
@@ -477,10 +726,16 @@ def prepare_subhalo_components(
     nside,
     round_up_decimals,
     chunk_size,
+    extended_cut_f=None,
+    pointlike_cut_f=None,
+    theta_aperture_deg=None,
 ):
     """
-    Build the extended CLUMPY list and pointlike HEALPix map
-    in a single chunked pass through the HDF5 catalog.
+    Build the extended CLUMPY list and pointlike HEALPix map.
+
+    Without cuts, this uses a single chunked pass through the HDF5 catalog.
+    With cuts enabled, it first computes the global theoretical brightest
+    pixel proxy and then performs a second pass to write only kept halos.
     """
 
     input_h5 = Path(input_h5)
@@ -496,6 +751,24 @@ def prepare_subhalo_components(
     theta_pix_deg = healpix_pixel_size_deg(nside)
     theta_min_deg = round_up(theta_pix_deg, decimals=round_up_decimals)
 
+    cuts_enabled = (
+        extended_cut_f is not None
+        or pointlike_cut_f is not None
+    )
+
+    if extended_cut_f is not None and extended_cut_f < 0.0:
+        raise ValueError("extended_cut_f must be non-negative.")
+
+    if pointlike_cut_f is not None and pointlike_cut_f < 0.0:
+        raise ValueError("pointlike_cut_f must be non-negative.")
+
+    if cuts_enabled:
+        if theta_aperture_deg is None:
+            theta_aperture_deg = 0.5 * theta_min_deg
+
+        if theta_aperture_deg <= 0.0:
+            raise ValueError("theta_aperture_deg must be positive.")
+
     group_name = f"iteration_{iteration}"
 
     pointlike_map = np.zeros(
@@ -508,10 +781,13 @@ def prepare_subhalo_components(
     total_invalid = 0
 
     total_extended = 0
+    total_extended_cut_kept = 0
     total_extended_written = 0
 
     total_pointlike = 0
+    total_pointlike_kept = 0
     total_pointlike_js = 0.0
+    total_pointlike_kept_js = 0.0
 
     with h5py.File(input_h5, "r") as h5:
         if group_name not in h5:
@@ -603,6 +879,54 @@ def prepare_subhalo_components(
         print(f"Pointlike: theta_s <  {theta_min_deg:.6f} deg")
         print(f"TOP_N for extended list: {top_n}")
         print(f"Chunk size: {chunk_size:,}")
+
+        cut_metadata = None
+        extended_j_cut = None
+        pointlike_j_cut = None
+
+        if cuts_enabled:
+            print("Subhalo cuts: enabled")
+            print(f"Theta aperture: {theta_aperture_deg:.6f} deg")
+            print(f"Extended cut fraction: {extended_cut_f}")
+            print(f"Pointlike cut fraction: {pointlike_cut_f}")
+            print("Computing theoretical brightest pixel reference...")
+
+            ref_info = compute_pixel_reference(
+                data=data,
+                column_indices=column_indices,
+                n_total=n_total,
+                theta_min_deg=theta_min_deg,
+                theta_aperture_deg=theta_aperture_deg,
+                chunk_size=chunk_size,
+            )
+
+            j_pixel_ref = ref_info["j_pixel_ref"]
+
+            if extended_cut_f is not None:
+                extended_j_cut = extended_cut_f * j_pixel_ref
+
+            if pointlike_cut_f is not None:
+                pointlike_j_cut = pointlike_cut_f * j_pixel_ref
+
+            cut_metadata = {
+                "theta_aperture_deg": theta_aperture_deg,
+                "brightest_pointlike": ref_info["brightest_pointlike"],
+                "brightest_extended": ref_info["brightest_extended"],
+                "j_pixel_ref": j_pixel_ref,
+                "extended_cut_f": extended_cut_f,
+                "pointlike_cut_f": pointlike_cut_f,
+                "extended_j_cut": extended_j_cut,
+                "pointlike_j_cut": pointlike_j_cut,
+            }
+
+            print(f"brightest pointlike proxy: {ref_info['brightest_pointlike']:.8e}")
+            print(f"brightest extended proxy:  {ref_info['brightest_extended']:.8e}")
+            print(f"J_pixel_ref:               {j_pixel_ref:.8e}")
+            print(f"Extended J cut:            {extended_j_cut}")
+            print(f"Pointlike J cut:           {pointlike_j_cut}")
+        else:
+            print("Subhalo cuts: disabled")
+
         print("=" * 80)
         print()
 
@@ -620,6 +944,7 @@ def prepare_subhalo_components(
                 chunk_size=chunk_size,
                 halo_type=halo_type,
                 top_n=top_n,
+                cut_metadata=cut_metadata,
             )
 
             for start_row in range(0, n_total, chunk_size):
@@ -641,44 +966,64 @@ def prepare_subhalo_components(
                 y_e = arr[:, column_indices["Yearth"]]
                 z_e = arr[:, column_indices["Zearth"]]
 
-                radius = np.sqrt(x_e**2 + y_e**2 + z_e**2)
-
-                valid = (
-                    np.isfinite(js)
-                    & np.isfinite(d_earth)
-                    & np.isfinite(theta_s)
-                    & np.isfinite(r_s)
-                    & np.isfinite(rho_s)
-                    & np.isfinite(x_e)
-                    & np.isfinite(y_e)
-                    & np.isfinite(z_e)
-                    & np.isfinite(radius)
-                    & (js > 0.0)
-                    & (d_earth > 0.0)
-                    & (r_s > 0.0)
-                    & (rho_s > 0.0)
-                    & (radius > 0.0)
+                valid = build_valid_mask(
+                    js=js,
+                    d_earth=d_earth,
+                    theta_s=theta_s,
+                    r_s=r_s,
+                    rho_s=rho_s,
+                    x_e=x_e,
+                    y_e=y_e,
+                    z_e=z_e,
                 )
 
                 mask_extended = valid & (theta_s >= theta_min_deg)
                 mask_pointlike = valid & (theta_s < theta_min_deg)
 
+                mask_extended_kept = mask_extended
+                mask_pointlike_kept = mask_pointlike
+
+                if extended_j_cut is not None and np.any(mask_extended):
+                    ext_jtheta = jtheta_from_js(
+                        js=js[mask_extended],
+                        d_earth_kpc=d_earth[mask_extended],
+                        rs_kpc=r_s[mask_extended],
+                        theta_aperture_deg=theta_aperture_deg,
+                    )
+                    local_ext_keep = ext_jtheta >= extended_j_cut
+                    mask_extended_kept = np.zeros_like(mask_extended)
+                    mask_extended_kept[np.flatnonzero(mask_extended)] = (
+                        local_ext_keep
+                    )
+
+                if pointlike_j_cut is not None:
+                    mask_pointlike_kept = mask_pointlike & (js >= pointlike_j_cut)
+
                 n_valid_chunk = int(np.count_nonzero(valid))
                 n_extended_chunk = int(np.count_nonzero(mask_extended))
+                n_extended_kept_chunk = int(np.count_nonzero(mask_extended_kept))
                 n_pointlike_chunk = int(np.count_nonzero(mask_pointlike))
+                n_pointlike_kept_chunk = int(np.count_nonzero(mask_pointlike_kept))
 
                 total_valid += n_valid_chunk
                 total_invalid += arr.shape[0] - n_valid_chunk
                 total_extended += n_extended_chunk
+                total_extended_cut_kept += n_extended_kept_chunk
                 total_pointlike += n_pointlike_chunk
+                total_pointlike_kept += n_pointlike_kept_chunk
 
                 if n_pointlike_chunk:
-                    js_pointlike = js[mask_pointlike]
+                    total_pointlike_js += js[mask_pointlike].sum(
+                        dtype=np.float64
+                    )
+
+                if n_pointlike_kept_chunk:
+                    js_pointlike = js[mask_pointlike_kept]
 
                     lon_deg, lat_deg = xyz_to_lb_deg(
-                        x_e[mask_pointlike],
-                        y_e[mask_pointlike],
-                        z_e[mask_pointlike],
+                        x_e[mask_pointlike_kept],
+                        y_e[mask_pointlike_kept],
+                        z_e[mask_pointlike_kept],
                     )
 
                     pixel = hp.ang2pix(
@@ -695,11 +1040,11 @@ def prepare_subhalo_components(
                         minlength=pointlike_map.size,
                     )
 
-                    total_pointlike_js += js_pointlike.sum(
+                    total_pointlike_kept_js += js_pointlike.sum(
                         dtype=np.float64
                     )
 
-                mask_extended_to_write = mask_extended
+                mask_extended_to_write = mask_extended_kept
 
                 if top_n is not None:
                     remaining = top_n - total_extended_written
@@ -710,11 +1055,11 @@ def prepare_subhalo_components(
                             dtype=bool,
                         )
                     else:
-                        kept_indices = np.flatnonzero(mask_extended)
+                        kept_indices = np.flatnonzero(mask_extended_to_write)
 
                         if kept_indices.size > remaining:
                             limited_mask = np.zeros_like(
-                                mask_extended,
+                                mask_extended_to_write,
                                 dtype=bool,
                             )
                             limited_mask[kept_indices[:remaining]] = True
@@ -735,8 +1080,10 @@ def prepare_subhalo_components(
                     f"Processed rows {start_row:,} - {end_row:,} / "
                     f"{n_total:,} | "
                     f"extended={total_extended:,} | "
+                    f"extended kept={total_extended_cut_kept:,} | "
                     f"extended written={total_extended_written:,} | "
-                    f"pointlike={total_pointlike:,}",
+                    f"pointlike={total_pointlike:,} | "
+                    f"pointlike kept={total_pointlike_kept:,}",
                     flush=True,
                 )
 
@@ -744,14 +1091,14 @@ def prepare_subhalo_components(
 
     if not np.isclose(
         map_sum,
-        total_pointlike_js,
+        total_pointlike_kept_js,
         rtol=1e-12,
         atol=0.0,
     ):
         raise RuntimeError(
             "Pointlike J-factor conservation failed: "
             f"sum(map)={map_sum:.16e}, "
-            f"sum(catalog)={total_pointlike_js:.16e}"
+            f"sum(catalog kept)={total_pointlike_kept_js:.16e}"
         )
 
     write_pointlike_fits(
@@ -761,7 +1108,9 @@ def prepare_subhalo_components(
         scenario=scenario,
         repop_id=repop_id,
         theta_cut_deg=theta_min_deg,
-        n_pointlike=total_pointlike,
+        n_pointlike=total_pointlike_kept,
+        n_pointlike_total=total_pointlike,
+        cut_metadata=cut_metadata,
     )
 
     print()
@@ -775,10 +1124,13 @@ def prepare_subhalo_components(
     print(f"Valid halos: {total_valid:,}")
     print(f"Invalid halos excluded: {total_invalid:,}")
     print(f"Extended halos: {total_extended:,}")
+    print(f"Extended halos kept by cut: {total_extended_cut_kept:,}")
     print(f"Extended halos written: {total_extended_written:,}")
     print(f"Pointlike halos: {total_pointlike:,}")
-    print(f"Pointlike catalog sum(Js): {total_pointlike_js:.16e}")
-    print(f"Pointlike map sum:         {map_sum:.16e}")
+    print(f"Pointlike halos kept by cut: {total_pointlike_kept:,}")
+    print(f"Pointlike catalog sum(Js), all:  {total_pointlike_js:.16e}")
+    print(f"Pointlike catalog sum(Js), kept: {total_pointlike_kept_js:.16e}")
+    print(f"Pointlike map sum:              {map_sum:.16e}")
     print(f"TOP_N for extended list: {top_n}")
     print("=" * 80)
 
@@ -791,12 +1143,22 @@ def main():
     if repop_id < 0:
         raise ValueError("repop_id must be a non-negative integer.")
 
+    nside = args.nside
+
+    if nside <= 0 or (nside & (nside - 1)) != 0:
+        raise ValueError("nside must be a positive power of two.")
+
     input_h5 = get_input_h5(repop_id, scenario)
-    output_list = get_output_list(repop_id, scenario, TOP_N)
+    output_list = get_output_list(
+        repop_id,
+        scenario,
+        TOP_N,
+        nside=nside,
+    )
     output_pointlike_fits = get_output_pointlike_fits(
         repop_id,
         scenario,
-        NSIDE,
+        nside,
     )
 
     prepare_subhalo_components(
@@ -808,9 +1170,12 @@ def main():
         iteration=ITERATION,
         top_n=TOP_N,
         halo_type=HALO_TYPE,
-        nside=NSIDE,
+        nside=nside,
         round_up_decimals=ROUND_UP_DECIMALS,
         chunk_size=CHUNK_SIZE,
+        extended_cut_f=args.extended_cut_f,
+        pointlike_cut_f=args.pointlike_cut_f,
+        theta_aperture_deg=args.theta_aperture_deg,
     )
 
 

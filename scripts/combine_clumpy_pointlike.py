@@ -13,7 +13,6 @@ from astropy.io import fits
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 BASE_RUN_DIR = REPOSITORY_ROOT / "outputs" / "clumpy"
 
-CLUMPY_BASENAME = "annihil_gal2D_LOS0_0_FOV360x180_nside1024"
 DEFAULT_NSIDE = 1024
 
 
@@ -37,16 +36,29 @@ def parse_args():
     return parser.parse_args()
 
 
+def nside_suffix(nside):
+    return "" if nside == DEFAULT_NSIDE else f"_nside{nside}"
+
+
+def clumpy_repop_dir(repop_tag, nside):
+    return f"{repop_tag}{nside_suffix(nside)}"
+
+
+def clumpy_basename(nside):
+    return f"annihil_gal2D_LOS0_0_FOV360x180_nside{nside}"
+
+
 def get_paths(repop_id, scenario, nside):
     repop_tag = f"repop_{repop_id:04d}"
     scenario_dir = BASE_RUN_DIR / scenario
+    output_repop_dir = clumpy_repop_dir(repop_tag, nside)
 
     corrected_fits = (
         scenario_dir
         / "outputs"
         / "corrected_clumpy"
-        / repop_tag
-        / f"{CLUMPY_BASENAME}.fits"
+        / output_repop_dir
+        / f"{clumpy_basename(nside)}.fits"
     )
 
     pointlike_fits = (
@@ -145,7 +157,7 @@ def make_hdu(
     hdu.header["LASTPIX"] = npix - 1
     hdu.header["INDXSCHM"] = "EXPLICIT"
     hdu.header["COORDSYS"] = "G"
-    hdu.header["OBJECT"] = "FULLSKY"
+    hdu.header["OBJECT"] = "PARTIAL"
     hdu.header["PIXAREA"] = (
         pixel_area_sr,
         "HEALPix pixel solid angle [sr]",
@@ -348,6 +360,9 @@ def main():
 
     if args.repop_id < 0:
         raise ValueError("repop_id must be a non-negative integer.")
+
+    if args.nside <= 0 or (args.nside & (args.nside - 1)) != 0:
+        raise ValueError("nside must be a positive power of two.")
 
     corrected_fits, pointlike_fits, output_fits = get_paths(
         args.repop_id,

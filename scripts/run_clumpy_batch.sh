@@ -16,6 +16,10 @@ Environment variables:
   POLL_SECONDS          Seconds between concurrency checks (default: 60)
   LAUNCH_DELAY_SECONDS  Delay between launches (default: 5)
   SKIP_COMPLETED        Skip non-empty final total FITS files (default: 1)
+  NSIDE                 HEALPix NSIDE inherited by one-case runs (default: 1024)
+  EXTENDED_CUT_F        Extended cut factor inherited by one-case runs (default: none)
+  POINTLIKE_CUT_F       Pointlike cut factor inherited by one-case runs (default: none)
+  THETA_APERTURE_DEG    Aperture for extended cut inherited by one-case runs
   CLUMPY_EXECUTABLE     CLUMPY executable or wrapper inherited by one-case runs
   PYTHON_EXECUTABLE     Python executable inherited by one-case runs
 
@@ -39,6 +43,13 @@ MAX_JOBS="${4:-8}"
 POLL_SECONDS="${POLL_SECONDS:-60}"
 LAUNCH_DELAY_SECONDS="${LAUNCH_DELAY_SECONDS:-5}"
 SKIP_COMPLETED="${SKIP_COMPLETED:-1}"
+DEFAULT_NSIDE=1024
+NSIDE="${NSIDE:-${DEFAULT_NSIDE}}"
+EXTENDED_CUT_F="${EXTENDED_CUT_F:-}"
+POINTLIKE_CUT_F="${POINTLIKE_CUT_F:-}"
+THETA_APERTURE_DEG="${THETA_APERTURE_DEG:-}"
+
+export NSIDE EXTENDED_CUT_F POINTLIKE_CUT_F THETA_APERTURE_DEG
 
 for value_name in START_ID END_ID MAX_JOBS POLL_SECONDS LAUNCH_DELAY_SECONDS; do
     value="${!value_name}"
@@ -55,6 +66,11 @@ fi
 
 if (( MAX_JOBS < 1 )); then
     echo "ERROR: max_jobs must be at least 1." >&2
+    exit 2
+fi
+
+if ! [[ "${NSIDE}" =~ ^[0-9]+$ ]] || (( NSIDE < 1 || (NSIDE & (NSIDE - 1)) != 0 )); then
+    echo "ERROR: NSIDE must be a positive power of two." >&2
     exit 2
 fi
 
@@ -101,6 +117,11 @@ echo "Maximum jobs:     ${MAX_JOBS}"
 echo "Poll interval:    ${POLL_SECONDS} s"
 echo "Launch delay:     ${LAUNCH_DELAY_SECONDS} s"
 echo "Skip completed:   ${SKIP_COMPLETED}"
+echo "NSIDE:            ${NSIDE}"
+echo "Cuts:"
+echo "  EXTENDED_CUT_F:      ${EXTENDED_CUT_F:-none}"
+echo "  POINTLIKE_CUT_F:     ${POINTLIKE_CUT_F:-none}"
+echo "  THETA_APERTURE_DEG:  ${THETA_APERTURE_DEG:-default}"
 echo "One-case script:  ${ONE_CASE_SCRIPT}"
 echo "Batch log dir:    ${BATCH_LOG_DIR}"
 echo "================================================================================"
@@ -201,7 +222,7 @@ for repop_id in $(seq "${START_ID}" "${END_ID}"); do
     printf -v repop_tag "repop_%04d" "${repop_id}"
 
     for scenario in "${SCENARIOS[@]}"; do
-        final_fits="${REPO_ROOT}/outputs/clumpy/${scenario}/outputs/total/${repop_tag}/auriga_total_nside1024.fits"
+        final_fits="${REPO_ROOT}/outputs/clumpy/${scenario}/outputs/total/${repop_tag}/auriga_total_nside${NSIDE}.fits"
 
         if [[ "${SKIP_COMPLETED}" == "1" && -s "${final_fits}" ]]; then
             echo "Skipping completed ${repop_tag} ${scenario}"

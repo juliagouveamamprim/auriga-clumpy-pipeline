@@ -52,6 +52,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 BASE_RUN_DIR = REPOSITORY_ROOT / "outputs" / "clumpy"
 TEMPLATE_DIR = REPOSITORY_ROOT / "configs" / "clumpy_templates"
+DEFAULT_NSIDE = 1024
 
 TEMPLATE_NAME = (
     "clumpy_params_g6_auriga_nfw_{scenario}_renorm_vmin0p1.template.txt"
@@ -83,6 +84,16 @@ def parse_args():
         "stage",
         choices=["raw", "corrected"],
         help="CLUMPY run stage.",
+    )
+
+    parser.add_argument(
+        "--nside",
+        type=int,
+        default=DEFAULT_NSIDE,
+        help=(
+            "HEALPix NSIDE for the CLUMPY run. The default keeps the "
+            "historical NSIDE=1024 filenames."
+        ),
     )
 
     return parser.parse_args()
@@ -124,7 +135,15 @@ def replace_clumpy_line(line, key, new_value):
     return new_line, True
 
 
-def get_paths(repop_id, scenario, stage):
+def nside_suffix(nside):
+    return "" if nside == DEFAULT_NSIDE else f"_nside{nside}"
+
+
+def clumpy_repop_dir(repop_tag, nside):
+    return f"{repop_tag}{nside_suffix(nside)}"
+
+
+def get_paths(repop_id, scenario, stage, nside):
     """
     Build all paths for one scenario/repop/stage.
     """
@@ -134,6 +153,8 @@ def get_paths(repop_id, scenario, stage):
 
     repop_tag = f"repop_{repop_id:04d}"
     scenario_dir = BASE_RUN_DIR / scenario
+    suffix = nside_suffix(nside)
+    output_repop_dir = clumpy_repop_dir(repop_tag, nside)
 
     template_path = (
         TEMPLATE_DIR
@@ -145,21 +166,21 @@ def get_paths(repop_id, scenario, stage):
             scenario_dir
             / "lists"
             / "raw"
-            / f"{repop_tag}_raw_nopointlike.txt"
+            / f"{repop_tag}_raw_nopointlike{suffix}.txt"
         )
 
         output_dir = (
             scenario_dir
             / "outputs"
             / "raw_clumpy"
-            / repop_tag
+            / output_repop_dir
         )
 
         output_param = (
             scenario_dir
             / "params"
             / "generated"
-            / f"{repop_tag}_raw_params.txt"
+            / f"{repop_tag}_raw_params{suffix}.txt"
         )
 
     else:
@@ -167,21 +188,21 @@ def get_paths(repop_id, scenario, stage):
             scenario_dir
             / "lists"
             / "corrected"
-            / f"{repop_tag}_rhocorr.txt"
+            / f"{repop_tag}_rhocorr{suffix}.txt"
         )
 
         output_dir = (
             scenario_dir
             / "outputs"
             / "corrected_clumpy"
-            / repop_tag
+            / output_repop_dir
         )
 
         output_param = (
             scenario_dir
             / "params"
             / "generated"
-            / f"{repop_tag}_corrected_params.txt"
+            / f"{repop_tag}_corrected_params{suffix}.txt"
         )
 
     return {
@@ -194,7 +215,7 @@ def get_paths(repop_id, scenario, stage):
     }
 
 
-def generate_one_param_file(repop_id, scenario, stage):
+def generate_one_param_file(repop_id, scenario, stage, nside=DEFAULT_NSIDE):
     """
     Generate one CLUMPY parameter file for one scenario/repop/stage.
     """
@@ -203,6 +224,7 @@ def generate_one_param_file(repop_id, scenario, stage):
         repop_id=repop_id,
         scenario=scenario,
         stage=stage,
+        nside=nside,
     )
 
     repop_tag = paths["repop_tag"]
@@ -232,6 +254,7 @@ def generate_one_param_file(repop_id, scenario, stage):
         f"# REPOP_ID: {repop_id}",
         f"# REPOP_TAG: {repop_tag}",
         f"# Stage: {stage}",
+        f"# NSIDE: {nside}",
         f"# Template: {template_path}",
         f"# Input halo list: {input_list}",
         f"# Output directory: {output_dir}",
@@ -243,6 +266,7 @@ def generate_one_param_file(repop_id, scenario, stage):
     ]
 
     found_list = False
+    found_nside = False
     found_output = False
 
     for line in lines:
@@ -253,6 +277,14 @@ def generate_one_param_file(repop_id, scenario, stage):
         )
         if replaced:
             found_list = True
+
+        line, replaced = replace_clumpy_line(
+            line=line,
+            key="gSIM_HEALPIX_NSIDE",
+            new_value=str(nside),
+        )
+        if replaced:
+            found_nside = True
 
         line, replaced = replace_clumpy_line(
             line=line,
@@ -267,6 +299,11 @@ def generate_one_param_file(repop_id, scenario, stage):
     if not found_list:
         raise RuntimeError(f"Did not find gLIST_HALOES in template: {template_path}")
 
+    if not found_nside:
+        raise RuntimeError(
+            f"Did not find gSIM_HEALPIX_NSIDE in template: {template_path}"
+        )
+
     if not found_output:
         raise RuntimeError(f"Did not find gSIM_OUTPUT_DIR in template: {template_path}")
 
@@ -280,6 +317,7 @@ def generate_one_param_file(repop_id, scenario, stage):
     print(f"REPOP_ID: {repop_id}")
     print(f"REPOP_TAG: {repop_tag}")
     print(f"Stage: {stage}")
+    print(f"NSIDE: {nside}")
     print(f"Generated: {output_param}")
     print(f"Input list: {input_list}")
     print(f"Output dir: {output_dir}")
@@ -289,10 +327,14 @@ def generate_one_param_file(repop_id, scenario, stage):
 def main():
     args = parse_args()
 
+    if args.nside <= 0 or (args.nside & (args.nside - 1)) != 0:
+        raise ValueError("nside must be a positive power of two.")
+
     generate_one_param_file(
         repop_id=args.repop_id,
         scenario=args.scenario,
         stage=args.stage,
+        nside=args.nside,
     )
 
 

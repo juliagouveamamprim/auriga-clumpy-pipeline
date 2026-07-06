@@ -55,8 +55,7 @@ import matplotlib.pyplot as plt
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 BASE_RUN_DIR = REPOSITORY_ROOT / "outputs" / "clumpy"
 
-# CLUMPY output basename currently produced by the g6 full-sky run.
-CLUMPY_BASENAME = "annihil_gal2D_LOS0_0_FOV360x180_nside1024"
+DEFAULT_NSIDE = 1024
 
 # Conversion factor:
 # [Msun^2 / kpc^5] -> [GeV^2 / cm^5]
@@ -84,6 +83,16 @@ def parse_args():
         help="Hydro scenario.",
     )
 
+    parser.add_argument(
+        "--nside",
+        type=int,
+        default=DEFAULT_NSIDE,
+        help=(
+            "HEALPix NSIDE of the raw CLUMPY run. The default keeps "
+            "the historical NSIDE=1024 filenames."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -91,41 +100,55 @@ def parse_args():
 # Path helpers
 # ============================================================
 
-def get_paths(repop_id, scenario):
+def nside_suffix(nside):
+    return "" if nside == DEFAULT_NSIDE else f"_nside{nside}"
+
+
+def clumpy_repop_dir(repop_tag, nside):
+    return f"{repop_tag}{nside_suffix(nside)}"
+
+
+def clumpy_basename(nside):
+    return f"annihil_gal2D_LOS0_0_FOV360x180_nside{nside}"
+
+
+def get_paths(repop_id, scenario, nside):
     repop_tag = f"repop_{repop_id:04d}"
     scenario_dir = BASE_RUN_DIR / scenario
+    suffix = nside_suffix(nside)
+    output_repop_dir = clumpy_repop_dir(repop_tag, nside)
 
     input_list = (
         scenario_dir
         / "lists"
         / "raw"
-        / f"{repop_tag}_raw_nopointlike.txt"
+        / f"{repop_tag}_raw_nopointlike{suffix}.txt"
     )
 
     raw_clumpy_output_dir = (
         scenario_dir
         / "outputs"
         / "raw_clumpy"
-        / repop_tag
+        / output_repop_dir
     )
 
-    rendered_log = raw_clumpy_output_dir / f"{CLUMPY_BASENAME}.halo_rendered.log"
+    rendered_log = raw_clumpy_output_dir / f"{clumpy_basename(nside)}.halo_rendered.log"
 
     output_list = (
         scenario_dir
         / "lists"
         / "corrected"
-        / f"{repop_tag}_rhocorr.txt"
+        / f"{repop_tag}_rhocorr{suffix}.txt"
     )
 
     output_dir = (
         scenario_dir
         / "logs"
         / "correction"
-        / repop_tag
+        / output_repop_dir
     )
 
-    output_table = output_dir / f"matched_R_diagnostics_{scenario}_{repop_tag}.csv"
+    output_table = output_dir / f"matched_R_diagnostics_{scenario}_{repop_tag}{suffix}.csv"
 
     return {
         "repop_tag": repop_tag,
@@ -488,8 +511,12 @@ def main():
 
     repop_id = args.repop_id
     scenario = args.scenario
+    nside = args.nside
 
-    paths = get_paths(repop_id=repop_id, scenario=scenario)
+    if nside <= 0 or (nside & (nside - 1)) != 0:
+        raise ValueError("nside must be a positive power of two.")
+
+    paths = get_paths(repop_id=repop_id, scenario=scenario, nside=nside)
 
     print()
     print("=" * 80)
@@ -498,6 +525,7 @@ def main():
     print(f"Scenario: {scenario}")
     print(f"REPOP_ID: {repop_id}")
     print(f"REPOP_TAG: {paths['repop_tag']}")
+    print(f"NSIDE: {nside}")
     print(f"Input list: {paths['input_list']}")
     print(f"Rendered log: {paths['rendered_log']}")
     print(f"Output corrected list: {paths['output_list']}")
