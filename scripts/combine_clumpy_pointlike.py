@@ -157,7 +157,7 @@ def make_hdu(
     hdu.header["LASTPIX"] = npix - 1
     hdu.header["INDXSCHM"] = "EXPLICIT"
     hdu.header["COORDSYS"] = "G"
-    hdu.header["OBJECT"] = "FULLSKY"
+    hdu.header["OBJECT"] = "PARTIAL"
     hdu.header["PIXAREA"] = (
         pixel_area_sr,
         "HEALPix pixel solid angle [sr]",

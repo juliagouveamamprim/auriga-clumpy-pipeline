@@ -512,7 +512,7 @@ def write_pointlike_fits(
         hdu.header["LASTPIX"] = npix - 1
         hdu.header["INDXSCHM"] = "EXPLICIT"
         hdu.header["COORDSYS"] = "G"
-        hdu.header["OBJECT"] = "FULLSKY"
+        hdu.header["OBJECT"] = "PARTIAL"
         hdu.header["SCENARIO"] = scenario
         hdu.header["REPOPID"] = repop_id
         hdu.header["THETACUT"] = (
