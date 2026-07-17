@@ -695,10 +695,8 @@ class RepopAlgorithm:
 
         data = data[keep]
 
-        # Sort final clean catalog by decreasing Js.
-        if data.shape[0] > 0:
-            order = np.argsort(data[:, 0])[::-1]
-            data = data[order]
+        # Keep the catalogue in its natural generation order.
+        # Downstream selections should use explicit masks/cuts, not row order.
 
         halo_names = self._make_halo_names(data.shape[0])
 

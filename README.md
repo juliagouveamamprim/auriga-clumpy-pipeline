@@ -56,7 +56,7 @@ The current HDF5 table contains ten columns:
 | `Yearth` | kpc | Earth-centered Galactic Cartesian coordinate |
 | `Zearth` | kpc | Earth-centered Galactic Cartesian coordinate |
 
-Before storage, invalid objects are removed, including Earth-engulfing and Roche-disrupted subhalos. The surviving catalog is sorted by decreasing `Js`.
+Before storage, invalid objects are removed, including Earth-engulfing and Roche-disrupted subhalos. The surviving catalog is kept in its natural generation order. Downstream selections should use explicit masks or J-factor cuts instead of relying on row order.
 
 ## Extended and pointlike separation
 

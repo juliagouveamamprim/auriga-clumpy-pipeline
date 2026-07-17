@@ -74,13 +74,9 @@ BASE_RUN_DIR = REPOSITORY_ROOT / "outputs" / "clumpy"
 # In our one-directory-per-repop convention, each HDF5 contains iteration_0.
 ITERATION = 0
 
-# For tests:
-#   TOP_N = 5000
-#
-# For the full list:
-#   TOP_N = None
-#
-# Important: TOP_N is applied AFTER the non-point-like cut.
+# Deprecated: TOP_N is no longer supported because the HDF5 catalogue
+# row order is not guaranteed to be sorted by J-factor.
+# Keep TOP_N = None and use explicit J-factor cuts instead.
 TOP_N = None
 
 # CLUMPY halo type.
@@ -737,6 +733,13 @@ def prepare_subhalo_components(
     With cuts enabled, it first computes the global theoretical brightest
     pixel proxy and then performs a second pass to write only kept halos.
     """
+
+    if top_n is not None:
+        raise ValueError(
+            "top_n is deprecated because the HDF5 catalogue row order is "
+            "no longer guaranteed to be sorted by J-factor. Use explicit "
+            "J-factor cuts instead."
+        )
 
     input_h5 = Path(input_h5)
     output_list = Path(output_list)
