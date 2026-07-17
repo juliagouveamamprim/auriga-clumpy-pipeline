@@ -81,14 +81,14 @@ assert data.shape == (2, 10), data.shape
 assert columns == expected_columns, columns
 assert len(units) == 10, units
 
-# Halos 1 and 2 are removed; the two survivors are sorted by decreasing Js.
-np.testing.assert_allclose(data[:, 0], [2e18, 1e18])
-np.testing.assert_allclose(data[:, 1], [40.0, 10.0])
+# Halos 1 and 2 are removed; the two survivors keep their natural order.
+np.testing.assert_allclose(data[:, 0], [1e18, 2e18])
+np.testing.assert_allclose(data[:, 1], [10.0, 40.0])
 
 # Xearth = -(Xgc - Xearth_position).
-np.testing.assert_allclose(data[:, 7], [4.0, 7.0])
-np.testing.assert_allclose(data[:, 8], [3.0, 0.0])
-np.testing.assert_allclose(data[:, 9], [2.0, 0.0])
+np.testing.assert_allclose(data[:, 7], [7.0, 4.0])
+np.testing.assert_allclose(data[:, 8], [0.0, 3.0])
+np.testing.assert_allclose(data[:, 9], [0.0, 2.0])
 
 assert names == ["hydro_res_00001", "hydro_res_00002"], names
 assert stats["n_generated"] == 4
@@ -96,7 +96,7 @@ assert stats["n_removed_engulfing"] == 1
 assert stats["n_removed_roche"] == 1
 assert stats["n_saved"] == 2
 
-print("PASS: v2 table has 10 columns and preserves filtering, sorting, coordinates, and metadata.")
+print("PASS: v2 table has 10 columns and preserves filtering, natural order, coordinates, and metadata.")
 print("Columns:", columns)
 print("Shape:", data.shape)
 print("Saved Js:", data[:, 0])

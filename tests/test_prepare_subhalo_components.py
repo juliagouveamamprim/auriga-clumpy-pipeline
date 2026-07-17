@@ -62,7 +62,7 @@ def main():
             scenario="resilient",
             repop_id=7,
             iteration=0,
-            top_n=1,
+            top_n=None,
             halo_type="DSPH",
             nside=8,
             round_up_decimals=2,
@@ -75,7 +75,7 @@ def main():
             if line.strip() and not line.startswith("#")
         ]
 
-        assert rows == ["extended_a"]
+        assert rows == ["extended_a", "extended_b"]
 
         with fits.open(output_fits) as hdul:
             assert hdul[1].name == "JFACTOR"
@@ -103,9 +103,28 @@ def main():
             assert np.isclose(jmap[pixel], 5e18, rtol=1e-12)
             assert np.allclose(jsr * pixel_area, jmap, rtol=1e-12)
 
+        try:
+            prepare_subhalo_components(
+                input_h5=input_h5,
+                output_list=tmp / "deprecated_topn.txt",
+                output_pointlike_fits=tmp / "deprecated_topn.fits",
+                scenario="resilient",
+                repop_id=7,
+                iteration=0,
+                top_n=1,
+                halo_type="DSPH",
+                nside=8,
+                round_up_decimals=2,
+                chunk_size=2,
+            )
+        except ValueError as exc:
+            assert "top_n is deprecated" in str(exc)
+        else:
+            raise AssertionError("top_n should raise ValueError")
+
     print(
-        "PASS: extended TOP_N does not truncate the pointlike map; "
-        "NESTED pixel placement and J conservation are correct."
+        "PASS: extended list, pointlike map, NESTED pixel placement, "
+        "J conservation, and top_n deprecation are correct."
     )
 
 
