@@ -640,6 +640,7 @@ def compute_pixel_reference(
     theta_min_deg,
     theta_aperture_deg,
     chunk_size,
+    progress_label=None,
 ):
     """
     Compute the diagnostic-inspired brightest theoretical pixel reference.
@@ -691,6 +692,13 @@ def compute_pixel_reference(
             )
             local_max = float(np.nanmax(ext_jtheta))
             brightest_extended = max(brightest_extended, local_max)
+
+        if progress_label is not None:
+            print(
+                f"{progress_label}: {end_row:,} / {n_total:,} rows "
+                f"({100.0 * end_row / n_total:.1f}%)",
+                flush=True,
+            )
 
     j_pixel_ref = max(brightest_pointlike, brightest_extended)
 

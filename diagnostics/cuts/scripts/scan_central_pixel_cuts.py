@@ -274,7 +274,10 @@ def main():
 
         n_total = data.shape[0]
 
-        print("Computing J_pixel_ref...")
+        print(
+            "[1/3] Computing J_pixel_ref",
+            flush=True,
+        )
 
         ref_info = compute_pixel_reference(
             data=data,
@@ -283,6 +286,7 @@ def main():
             theta_min_deg=theta_min_deg,
             theta_aperture_deg=theta_aperture_deg,
             chunk_size=args.chunk_size,
+            progress_label="Reference scan",
         )
 
         j_pixel_ref = ref_info["j_pixel_ref"]
@@ -340,7 +344,10 @@ def main():
             for f_value in extended_f_values
         }
 
-        print("Building complete and discarded central-pixel maps...")
+        print(
+            "[2/3] Building central-pixel maps",
+            flush=True,
+        )
 
         for start_row in range(0, n_total, args.chunk_size):
             end_row = min(start_row + args.chunk_size, n_total)
@@ -467,7 +474,8 @@ def main():
             print(
                 f"Rows {start_row:,}-{end_row:,}/{n_total:,} | "
                 f"pointlike={n_pointlike_total:,} | "
-                f"extended={n_extended_total:,}"
+                f"extended={n_extended_total:,}",
+                flush=True,
             )
 
     full_combined = pointlike_full + extended_full
@@ -485,7 +493,10 @@ def main():
     rows = []
 
     print()
-    print("Evaluating combined cut pairs...")
+    print(
+        "[3/3] Evaluating combined cut pairs",
+        flush=True,
+    )
 
     for pointlike_f in pointlike_f_values:
         pointlike_discarded = pointlike_discarded_maps[pointlike_f]
