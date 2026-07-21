@@ -29,6 +29,7 @@ from scripts.prepare_subhalo_components import (  # noqa: E402
 
 
 DEFAULT_F_VALUES = "1e-5,1e-4,1e-3,1e-2"
+VALID_EXTENDED_ENVELOPE_MODES = {"aperture", "theta-s"}
 
 
 def parse_f_values(text):
@@ -41,6 +42,33 @@ def parse_f_values(text):
         raise ValueError("Cut fractions must be finite and non-negative.")
 
     return values
+
+
+def parse_envelope_modes(text):
+    normalized = text.strip().lower()
+
+    if normalized in {"", "none"}:
+        return []
+
+    modes = list(
+        dict.fromkeys(
+            value.strip()
+            for value in normalized.split(",")
+            if value.strip()
+        )
+    )
+
+    invalid = sorted(
+        set(modes) - VALID_EXTENDED_ENVELOPE_MODES
+    )
+
+    if invalid:
+        raise ValueError(
+            "Invalid extended envelope mode(s): "
+            + ", ".join(invalid)
+        )
+
+    return modes
 
 
 def parse_args():
@@ -91,6 +119,15 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--extended-envelope-modes",
+        default="none",
+        help=(
+            "Comma-separated conservative envelope modes: "
+            "'aperture', 'theta-s', or 'none'."
+        ),
+    )
+
+    parser.add_argument(
         "--chunk-size",
         type=int,
         default=CHUNK_SIZE,
@@ -114,6 +151,69 @@ def add_weighted_pixels(target, pixel, weights):
         weights=weights,
         minlength=target.size,
     )
+
+
+def add_extended_envelope_maps(
+    target_maps,
+    cuts,
+    nside,
+    lon_deg,
+    lat_deg,
+    theta_s_deg,
+    weights,
+    aperture_deg,
+):
+    """Repeat discarded extended contributions across selected footprints."""
+    if not target_maps or weights.size == 0:
+        return
+
+    candidate = weights < max(cuts.values())
+
+    if not np.any(candidate):
+        return
+
+    candidate_lon = lon_deg[candidate]
+    candidate_lat = lat_deg[candidate]
+    candidate_theta_s = theta_s_deg[candidate]
+    candidate_weights = weights[candidate]
+
+    vectors = hp.ang2vec(
+        candidate_lon,
+        candidate_lat,
+        lonlat=True,
+    )
+
+    for index, (vector, weight) in enumerate(
+        zip(vectors, candidate_weights)
+    ):
+        for mode, mode_maps in target_maps.items():
+            if mode == "aperture":
+                radius_deg = aperture_deg
+            else:
+                radius_deg = candidate_theta_s[index]
+
+            if not np.isfinite(radius_deg) or radius_deg <= 0.0:
+                continue
+
+            if radius_deg >= 180.0:
+                pixels = None
+            else:
+                pixels = hp.query_disc(
+                    nside,
+                    vector,
+                    np.deg2rad(radius_deg),
+                    inclusive=True,
+                    nest=True,
+                )
+
+            for f_value, j_cut in cuts.items():
+                if weight >= j_cut:
+                    continue
+
+                if pixels is None:
+                    mode_maps[f_value] += weight
+                else:
+                    mode_maps[f_value][pixels] += weight
 
 
 def pixel_coordinates(nside, pixel):
@@ -150,6 +250,9 @@ def main():
 
     pointlike_f_values = parse_f_values(args.pointlike_f_values)
     extended_f_values = parse_f_values(args.extended_f_values)
+    extended_envelope_modes = parse_envelope_modes(
+        args.extended_envelope_modes
+    )
 
     input_h5 = (
         args.input_h5.resolve()
@@ -196,8 +299,22 @@ def main():
         2
         + len(pointlike_f_values)
         + len(extended_f_values)
+        + len(extended_envelope_modes) * len(extended_f_values)
     )
-    estimated_gib = map_count_during_scan * npix * 8 / 1024**3
+
+    map_count_during_evaluation = (
+        len(pointlike_f_values)
+        + len(extended_f_values)
+        + len(extended_envelope_modes) * len(extended_f_values)
+        + 2
+        + int(bool(extended_envelope_modes))
+    )
+
+    peak_map_count = max(
+        map_count_during_scan,
+        map_count_during_evaluation,
+    )
+    estimated_gib = peak_map_count * npix * 8 / 1024**3
 
     print("=" * 80)
     print("Catalogue-wise combined cut scan")
@@ -212,9 +329,17 @@ def main():
     print(f"Extended aperture: {theta_aperture_deg:.8f} deg")
     print(f"Pointlike f values: {pointlike_f_values}")
     print(f"Extended f values: {extended_f_values}")
+    print(
+        "Extended envelope modes: "
+        + (
+            ", ".join(extended_envelope_modes)
+            if extended_envelope_modes
+            else "none"
+        )
+    )
     print(f"Chunk size: {args.chunk_size:,}")
     print(
-        "Estimated persistent map memory during catalogue scan: "
+        "Estimated peak persistent map memory: "
         f"{estimated_gib:.2f} GiB"
     )
     print("=" * 80)
@@ -322,6 +447,14 @@ def main():
             for f_value in extended_f_values
         }
 
+        extended_envelope_maps = {
+            mode: {
+                f_value: np.zeros(npix, dtype=np.float64)
+                for f_value in extended_f_values
+            }
+            for mode in extended_envelope_modes
+        }
+
         n_valid_total = 0
         n_pointlike_total = 0
         n_extended_total = 0
@@ -345,7 +478,7 @@ def main():
         }
 
         print(
-            "[2/3] Building central-pixel maps",
+            "[2/3] Building central-pixel and envelope maps",
             flush=True,
         )
 
@@ -452,6 +585,17 @@ def main():
                     extended_jtheta,
                 )
 
+                add_extended_envelope_maps(
+                    target_maps=extended_envelope_maps,
+                    cuts=extended_cuts,
+                    nside=args.nside,
+                    lon_deg=extended_lon,
+                    lat_deg=extended_lat,
+                    theta_s_deg=theta_s[mask_extended],
+                    weights=extended_jtheta,
+                    aperture_deg=theta_aperture_deg,
+                )
+
                 for f_value, j_cut in extended_cuts.items():
                     discarded = extended_jtheta < j_cut
 
@@ -490,6 +634,11 @@ def main():
     del extended_full
 
     temporary_map = np.empty(npix, dtype=np.float64)
+    envelope_temporary_map = (
+        np.empty(npix, dtype=np.float64)
+        if extended_envelope_modes
+        else None
+    )
     rows = []
 
     print()
@@ -553,6 +702,66 @@ def main():
                 else float("inf")
             )
 
+            envelope_results = {}
+
+            for mode in extended_envelope_modes:
+                mode_key = mode.replace("-", "_")
+                extended_envelope = (
+                    extended_envelope_maps[mode][extended_f]
+                )
+
+                np.add(
+                    pointlike_discarded,
+                    extended_envelope,
+                    out=envelope_temporary_map,
+                )
+
+                envelope_pixel = int(
+                    np.argmax(envelope_temporary_map)
+                )
+                envelope_max = float(
+                    envelope_temporary_map[envelope_pixel]
+                )
+                envelope_lon, envelope_lat = pixel_coordinates(
+                    args.nside,
+                    envelope_pixel,
+                )
+
+                envelope_ratio = (
+                    envelope_max / max_final
+                    if max_final > 0.0
+                    else float("inf")
+                )
+
+                envelope_results.update(
+                    {
+                        (
+                            "max_discarded_extended_"
+                            f"{mode_key}_envelope_pixel"
+                        ): float(extended_envelope.max()),
+                        (
+                            "max_discarded_combined_"
+                            f"{mode_key}_envelope_pixel"
+                        ): envelope_max,
+                        (
+                            "pixel_max_discarded_combined_"
+                            f"{mode_key}_envelope"
+                        ): envelope_pixel,
+                        (
+                            "lon_max_discarded_combined_"
+                            f"{mode_key}_envelope_deg"
+                        ): envelope_lon,
+                        (
+                            "lat_max_discarded_combined_"
+                            f"{mode_key}_envelope_deg"
+                        ): envelope_lat,
+                        (
+                            "ratio_max_discarded_"
+                            f"{mode_key}_envelope_to_final"
+                        ): envelope_ratio,
+                    }
+                )
+
             fraction_sum_discarded_to_full = (
                 discarded_sum / full_sum
                 if full_sum > 0.0
@@ -568,6 +777,11 @@ def main():
                 "theta_pix_deg": theta_pix_deg,
                 "theta_min_deg": theta_min_deg,
                 "theta_aperture_deg": theta_aperture_deg,
+                "extended_envelope_modes": (
+                    ",".join(extended_envelope_modes)
+                    if extended_envelope_modes
+                    else "none"
+                ),
                 "j_pixel_ref": j_pixel_ref,
                 "brightest_pointlike_proxy": (
                     ref_info["brightest_pointlike"]
@@ -627,15 +841,33 @@ def main():
                 ),
             }
 
+            row.update(envelope_results)
             rows.append(row)
+
+            envelope_summary_parts = []
+
+            for mode in extended_envelope_modes:
+                mode_key = mode.replace("-", "_")
+                ratio_key = (
+                    "ratio_max_discarded_"
+                    f"{mode_key}_envelope_to_final"
+                )
+                envelope_summary_parts.append(
+                    f" | {mode}="
+                    f"{envelope_results[ratio_key]:.6e}"
+                )
+
+            envelope_summary = "".join(
+                envelope_summary_parts
+            )
 
             print(
                 f"f_pl={pointlike_f:.1e} "
                 f"f_ext={extended_f:.1e} | "
                 f"N_pl={n_pointlike_kept:,} "
                 f"N_ext={n_extended_kept:,} | "
-                "max(discarded)/max(final)="
-                f"{ratio_max_discarded_to_final:.6e}"
+                f"central={ratio_max_discarded_to_final:.6e}"
+                f"{envelope_summary}"
             )
 
     fieldnames = list(rows[0].keys())
@@ -647,7 +879,7 @@ def main():
 
     print()
     print("=" * 80)
-    print("Finished central-pixel cut scan")
+    print("Finished combined cut scan")
     print("=" * 80)
     print(f"Output CSV: {output_csv}")
     print(f"Rows written: {len(rows)}")
