@@ -23,37 +23,30 @@ This follows the pixel-wise metric previously used with CLUMPY-rendered discarde
 
 The output also records the numbers of pointlike and extended halos kept after each cut.
 
-## Conservative extended-halo envelopes
+## Conservative extended-halo envelope
 
-Optional conservative envelopes can be enabled with:
+The conservative `theta-s` envelope can be enabled with:
 
-    --extended-envelope-modes aperture,theta-s
+    --extended-envelope-modes theta-s
 
-The available modes are:
+For each discarded extended halo, the same `Jtheta` contribution is
+repeated in every HEALPix pixel intersected by a disc of radius
+`theta_s`. This is an intentionally extreme stress test; `theta_s` is a
+characteristic angular scale, not a physical outer boundary.
 
-- `aperture`: repeats each discarded extended-halo `Jtheta` contribution
-  in every HEALPix pixel intersected by the aperture used to calculate
-  `Jtheta`;
-- `theta-s`: repeats the same contribution in every pixel intersected
-  by a disc of radius `theta_s`. This is an intentionally extreme
-  stress test; `theta_s` is a characteristic angular scale, not a
-  physical outer boundary.
+The central-pixel result and the `theta-s` envelope are stored as
+separate pixel-wise metrics.
 
-The central-pixel result, aperture envelope, and `theta-s` envelope are
-stored as separate pixel-wise metrics.
-
-These envelopes are not physical rendered maps. They deliberately
-repeat the same `Jtheta` contribution across multiple pixels and must
-not be used for integrated or cumulative J-factor quantities. All
-integrated quantities in the CSV continue to use the central-pixel
-proxy only.
+The envelope is not a physical rendered map. It deliberately repeats
+the same `Jtheta` contribution across multiple pixels and must not be
+used for integrated or cumulative J-factor quantities. All integrated
+quantities in the CSV continue to use the central-pixel proxy only.
 
 ## Scope
 
 This diagnostic does not render the radial surface-brightness profiles
-of extended halos. The envelope modes provide conservative pixel-wise
-bounds for choosing cut candidates before a smaller number of full
-CLUMPY tests.
+of extended halos. The `theta-s` envelope provides a conservative pixel-wise bound for
+choosing cut candidates before a smaller number of full CLUMPY tests.
 
 Large HDF5 catalogues, FITS maps, temporary outputs, and full scan
 results should not be committed.
@@ -82,8 +75,8 @@ Existing compatible individual CSV files are reused by default. Use
 After all scans, the driver produces:
 
 - a combined CSV containing every individual result;
-- a summary CSV grouped by scenario, NSIDE, aperture, and pair of cut
-  fractions.
+- a summary CSV grouped by scenario, NSIDE, `Jtheta` aperture, envelope
+  mode, and pair of cut fractions.
 
 For each numerical diagnostic, the summary records:
 
@@ -110,7 +103,7 @@ A ten-repopulation production scanning
         --pointlike-f-values 1e-2,1e-3,1e-4,1e-5 \
         --extended-f-values 1e-2,1e-3,1e-4,1e-5 \
         --theta-aperture-deg 0.015 \
-        --extended-envelope-modes aperture,theta-s
+        --extended-envelope-modes theta-s
 
 Use `--aggregate-only` to regenerate the combined and summary CSV files
 without rerunning the individual scans.

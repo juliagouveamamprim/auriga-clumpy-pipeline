@@ -29,7 +29,7 @@ from scripts.prepare_subhalo_components import (  # noqa: E402
 
 
 DEFAULT_F_VALUES = "1e-5,1e-4,1e-3,1e-2"
-VALID_EXTENDED_ENVELOPE_MODES = {"aperture", "theta-s"}
+VALID_EXTENDED_ENVELOPE_MODES = {"theta-s"}
 
 
 def parse_f_values(text):
@@ -122,8 +122,7 @@ def parse_args():
         "--extended-envelope-modes",
         default="none",
         help=(
-            "Comma-separated conservative envelope modes: "
-            "'aperture', 'theta-s', or 'none'."
+            "Conservative envelope mode: 'theta-s' or 'none'."
         ),
     )
 
@@ -161,7 +160,6 @@ def add_extended_envelope_maps(
     lat_deg,
     theta_s_deg,
     weights,
-    aperture_deg,
 ):
     """Repeat discarded extended contributions across selected footprints."""
     if not target_maps or weights.size == 0:
@@ -186,11 +184,8 @@ def add_extended_envelope_maps(
     for index, (vector, weight) in enumerate(
         zip(vectors, candidate_weights)
     ):
-        for mode, mode_maps in target_maps.items():
-            if mode == "aperture":
-                radius_deg = aperture_deg
-            else:
-                radius_deg = candidate_theta_s[index]
+        for mode_maps in target_maps.values():
+            radius_deg = candidate_theta_s[index]
 
             if not np.isfinite(radius_deg) or radius_deg <= 0.0:
                 continue
@@ -593,7 +588,6 @@ def main():
                     lat_deg=extended_lat,
                     theta_s_deg=theta_s[mask_extended],
                     weights=extended_jtheta,
-                    aperture_deg=theta_aperture_deg,
                 )
 
                 for f_value, j_cut in extended_cuts.items():

@@ -36,7 +36,7 @@ DEFAULT_LOGS_DIR = (
 )
 
 VALID_SCENARIOS = {"fragile", "resilient"}
-VALID_ENVELOPE_MODES = {"aperture", "theta-s"}
+VALID_ENVELOPE_MODES = {"theta-s"}
 
 BASE_AGGREGATE_METRICS = [
     "n_valid_total",
@@ -181,7 +181,7 @@ def parse_args():
 
     parser.add_argument(
         "--extended-envelope-modes",
-        default="aperture,theta-s",
+        default="theta-s",
     )
 
     parser.add_argument(
