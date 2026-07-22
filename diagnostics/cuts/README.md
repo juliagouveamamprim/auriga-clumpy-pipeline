@@ -57,3 +57,60 @@ CLUMPY tests.
 
 Large HDF5 catalogues, FITS maps, temporary outputs, and full scan
 results should not be committed.
+
+## Multiple-repopulation scan
+
+The script `scripts/scan_multiple_repops.py` runs the individual cut
+diagnostic over a configurable range of repopulations and aggregates the
+results.
+
+The repopulation range is selected with:
+
+    --repop-start 0
+    --n-repops 10
+
+This example evaluates `repop_0000` through `repop_0009`.
+
+The scenarios can be selected independently or together:
+
+    --scenarios fragile,resilient
+
+Each repopulation and scenario still produces an individual CSV and log.
+Existing compatible individual CSV files are reused by default. Use
+`--overwrite` to recompute them.
+
+After all scans, the driver produces:
+
+- a combined CSV containing every individual result;
+- a summary CSV grouped by scenario, NSIDE, aperture, and pair of cut
+  fractions.
+
+For each numerical diagnostic, the summary records:
+
+- mean;
+- sample standard deviation;
+- median;
+- minimum;
+- maximum.
+
+For the pixel-impact ratios, the summary also records the repopulation
+that produced the maximum value. The mean describes the typical
+behaviour, while the maximum across repopulations should be checked when
+deciding whether a cut satisfies the adopted tolerance.
+
+A ten-repopulation production scanning
+`pointlike_f, extended_f = 1e-2, 1e-3, 1e-4, 1e-5` can be launched with:
+
+    python -u diagnostics/cuts/scripts/scan_multiple_repops.py \
+        --repop-start 0 \
+        --n-repops 10 \
+        --scenarios fragile,resilient \
+        --input-root /dados5/julia/Auriga_outputs_hdf5_v2 \
+        --nside 2048 \
+        --pointlike-f-values 1e-2,1e-3,1e-4,1e-5 \
+        --extended-f-values 1e-2,1e-3,1e-4,1e-5 \
+        --theta-aperture-deg 0.015 \
+        --extended-envelope-modes aperture,theta-s
+
+Use `--aggregate-only` to regenerate the combined and summary CSV files
+without rerunning the individual scans.
