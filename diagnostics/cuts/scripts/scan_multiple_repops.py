@@ -8,6 +8,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import healpy as hp
 import numpy as np
 
 
@@ -177,6 +178,10 @@ def parse_args():
         "--theta-aperture-deg",
         type=float,
         default=None,
+        help=(
+            "Deprecated. The extended proxy now uses the CLUMPY "
+            "aperture hp.max_pixrad(NSIDE), derived automatically."
+        ),
     )
 
     parser.add_argument(
@@ -314,7 +319,6 @@ def validate_existing_csv(
     pointlike_f_values,
     extended_f_values,
     envelope_modes,
-    theta_aperture_deg,
 ):
     rows = read_csv_rows(path)
 
@@ -353,19 +357,30 @@ def validate_existing_csv(
             f"Existing CSV has incompatible extended cuts: {path}"
         )
 
-    if theta_aperture_deg is not None:
-        observed = {
-            float(row["theta_aperture_deg"])
-            for row in rows
-        }
+    expected_alpha_int_deg = float(
+        np.rad2deg(hp.max_pixrad(nside))
+    )
 
-        if not all(
-            np.isclose(value, theta_aperture_deg)
-            for value in observed
-        ):
-            raise ValueError(
-                f"Existing CSV has incompatible aperture: {path}"
-            )
+    observed = {
+        float(row["theta_aperture_deg"])
+        for row in rows
+    }
+
+    if not all(
+        np.isclose(
+            value,
+            expected_alpha_int_deg,
+            rtol=0.0,
+            atol=1.0e-10,
+        )
+        for value in observed
+    ):
+        raise ValueError(
+            "Existing CSV has an incompatible or legacy aperture: "
+            f"{path}; expected "
+            f"{expected_alpha_int_deg:.12f} deg, "
+            f"found {sorted(observed)}"
+        )
 
     return rows
 
@@ -397,14 +412,6 @@ def build_scan_command(
 
     if input_h5 is not None:
         command.extend(["--input-h5", str(input_h5)])
-
-    if args.theta_aperture_deg is not None:
-        command.extend(
-            [
-                "--theta-aperture-deg",
-                str(args.theta_aperture_deg),
-            ]
-        )
 
     if args.chunk_size is not None:
         command.extend(
@@ -653,6 +660,12 @@ def print_summary(summary_rows):
 def main():
     args = parse_args()
 
+    if args.theta_aperture_deg is not None:
+        raise ValueError(
+            "--theta-aperture-deg is deprecated. The aperture is now "
+            "derived automatically as hp.max_pixrad(NSIDE)."
+        )
+
     if args.repop_start < 0:
         raise ValueError("repop-start must be non-negative.")
 
@@ -761,7 +774,6 @@ def main():
                         pointlike_f_values,
                         extended_f_values,
                         envelope_modes,
-                        args.theta_aperture_deg,
                     )
                 elif args.aggregate_only:
                     message = (
@@ -796,7 +808,6 @@ def main():
                         pointlike_f_values,
                         extended_f_values,
                         envelope_modes,
-                        args.theta_aperture_deg,
                     )
 
                 collected_rows.extend(

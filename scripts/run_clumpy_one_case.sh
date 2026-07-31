@@ -68,7 +68,6 @@ NSIDE="${NSIDE:-${DEFAULT_NSIDE}}"
 
 EXTENDED_CUT_F="${EXTENDED_CUT_F:-}"
 POINTLIKE_CUT_F="${POINTLIKE_CUT_F:-}"
-THETA_APERTURE_DEG="${THETA_APERTURE_DEG:-}"
 
 if ! [[ "${NSIDE}" =~ ^[0-9]+$ ]] || (( NSIDE < 1 || (NSIDE & (NSIDE - 1)) != 0 )); then
     echo "ERROR: NSIDE must be a positive power of two."
@@ -122,7 +121,7 @@ echo "Run tag:   ${REPOP_RUN_TAG}"
 echo "Cuts:"
 echo "  EXTENDED_CUT_F:      ${EXTENDED_CUT_F:-none}"
 echo "  POINTLIKE_CUT_F:     ${POINTLIKE_CUT_F:-none}"
-echo "  THETA_APERTURE_DEG:  ${THETA_APERTURE_DEG:-default}"
+echo "  Extended aperture:   hp.max_pixrad(NSIDE), derived automatically"
 echo "Time:      $(date)"
 echo "======================================================================"
 echo
@@ -156,10 +155,6 @@ fi
 
 if [ -n "${POINTLIKE_CUT_F}" ]; then
     PREPARE_ARGS+=("--pointlike-cut-f" "${POINTLIKE_CUT_F}")
-fi
-
-if [ -n "${THETA_APERTURE_DEG}" ]; then
-    PREPARE_ARGS+=("--theta-aperture-deg" "${THETA_APERTURE_DEG}")
 fi
 
 "${PYTHON}" "${SCRIPTS_DIR}/prepare_subhalo_components.py" "${PREPARE_ARGS[@]}"

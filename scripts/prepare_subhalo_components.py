@@ -140,8 +140,8 @@ def parse_args():
         default=None,
         help=(
             "Optional cut fraction for extended halos. If provided, "
-            "extended halos are kept only when J_theta(theta_aperture) "
-            ">= extended_cut_f * J_pixel_ref."
+            "extended halos are kept only when their corrected-CLUMPY "
+            "central-pixel proxy is >= extended_cut_f * J_pixel_ref."
         ),
     )
 
@@ -161,9 +161,8 @@ def parse_args():
         type=float,
         default=None,
         help=(
-            "Aperture angle used to estimate the central-pixel proxy "
-            "J_theta for extended halos. If omitted and cuts are enabled, "
-            "defaults to half the pointlike/extended threshold."
+            "Deprecated. The extended central-pixel proxy now uses the "
+            "CLUMPY aperture hp.max_pixrad(NSIDE), derived automatically."
         ),
     )
 
@@ -363,7 +362,7 @@ def write_header(
                 f"# pointlike_cut_f = {cut_metadata['pointlike_cut_f']}",
                 f"# extended_J_cut = {cut_metadata['extended_j_cut']}",
                 f"# pointlike_J_cut = {cut_metadata['pointlike_j_cut']}",
-                "# Extended cut: keep if J_theta(theta_aperture) >= extended_J_cut",
+                "# Extended cut: keep if central_pixel_proxy >= extended_J_cut",
                 "# Pointlike cut: keep if Js >= pointlike_J_cut",
                 "#",
             ]
@@ -530,7 +529,7 @@ def write_pointlike_fits(
             hdu.header["CUTS"] = (True, "Subhalo cuts applied")
             hdu.header["THETAAP"] = (
                 float(cut_metadata["theta_aperture_deg"]),
-                "Aperture used for Jtheta [deg]",
+                "CLUMPY max-pixel-radius aperture [deg]",
             )
             hdu.header["JREF"] = (
                 float(cut_metadata["j_pixel_ref"]),
@@ -552,7 +551,7 @@ def write_pointlike_fits(
                 )
                 hdu.header["JCEXT"] = (
                     float(cut_metadata["extended_j_cut"]),
-                    "Extended Jtheta cut",
+                    "Extended central-pixel proxy cut",
                 )
             hdu.header["BPL"] = (
                 float(cut_metadata["brightest_pointlike"]),
@@ -580,35 +579,153 @@ def write_pointlike_fits(
 
 
 
-def jtheta_from_js(js, d_earth_kpc, rs_kpc, theta_aperture_deg):
+def projected_nfw_fraction(y):
     """
-    Estimate the theoretical central-pixel J contribution for an NFW halo.
+    Return the projected annihilation-J fraction for a truncated NFW halo.
 
-    The HDF5 stores Js integrated up to r_s. For the NFW radial factor used
-    in the diagnostics:
+    The halo is truncated at r_s, consistently with the CLUMPY lists
+    produced by this pipeline. The dimensionless projected aperture is
 
-        Js = J_general * (7 / 8)
+        y = D_Earth * sin(alpha_int) / r_s.
 
-    and
+    The returned fraction is normalized to the HDF5 Js, which is the
+    annihilation J-factor integrated over the halo up to r_s.
 
-        J_theta = Js * radial_factor(theta) / (7 / 8)
-
-    with radial_factor(theta) = 1 - 1 / (1 + D tan(theta) / r_s)^3.
+    This is the closed-form result for a circular aperture centred on
+    the halo. Series expansions are used near y = 0 and y = 1 to avoid
+    catastrophic cancellation.
     """
 
-    theta_rad = np.deg2rad(theta_aperture_deg)
+    y = np.asarray(y, dtype=np.float64)
+    fraction = np.zeros_like(y)
+
+    fraction[y >= 1.0] = 1.0
+
+    valid = (y > 0.0) & (y < 1.0)
+    small = valid & (y < 1.0e-4)
+
+    if np.any(small):
+        z = y[small]
+
+        fraction[small] = (
+            12.0 * np.pi * z / 7.0
+            + z**2
+            * (
+                48.0 * np.log(z) / 7.0
+                - 11.0 / 14.0
+            )
+            + z**4
+            * (
+                60.0 * np.log(z) / 7.0
+                + 83.0 / 56.0
+            )
+        )
+
+    near_one = (
+        valid
+        & ~small
+        & ((1.0 - y) < 1.0e-4)
+    )
+
+    if np.any(near_one):
+        eps = 1.0 - y[near_one]
+
+        fraction[near_one] = (
+            1.0
+            - np.sqrt(2.0) * eps**1.5 / 7.0
+            - 17.0 * np.sqrt(2.0) * eps**2.5 / 140.0
+            - 809.0 * np.sqrt(2.0) * eps**3.5 / 7840.0
+        )
+
+    regular = valid & ~small & ~near_one
+
+    if np.any(regular):
+        z = y[regular]
+
+        numerator = (
+            7.0
+            - 36.0 * z**2
+            + 45.0 * z**4
+            - 16.0 * z**6
+            - 12.0
+            * z**2
+            * (2.0 * z**4 - 5.0 * z**2 + 4.0)
+            * np.log(z)
+        )
+
+        excluded_fraction = (
+            -z * np.arccos(z)
+            + numerator
+            / (
+                24.0
+                * (1.0 - z**2) ** 2.5
+            )
+        )
+
+        fraction[regular] = (
+            1.0
+            - 24.0 * excluded_fraction / 7.0
+        )
+
+    fraction[~np.isfinite(fraction)] = 0.0
+
+    return np.clip(fraction, 0.0, 1.0)
+
+
+def clumpy_central_pixel_proxy_from_js(
+    js,
+    d_earth_kpc,
+    rs_kpc,
+    nside,
+):
+    """
+    Estimate the corrected-CLUMPY central-pixel contribution.
+
+    CLUMPY evaluates the J-factor in a circular aperture whose radius is
+
+        alpha_int = hp.max_pixrad(nside),
+
+    and then rescales the aperture-integrated value by
+
+        Omega_pixel / Omega_aperture.
+
+    The projected NFW fraction is evaluated analytically, so this function
+    requires no numerical integration per subhalo.
+    """
+
+    alpha_int_rad = float(hp.max_pixrad(nside))
+    omega_pixel = float(hp.nside2pixarea(nside))
+    omega_aperture = float(
+        2.0
+        * np.pi
+        * (1.0 - np.cos(alpha_int_rad))
+    )
+
+    js = np.asarray(js, dtype=np.float64)
+    d_earth_kpc = np.asarray(d_earth_kpc, dtype=np.float64)
+    rs_kpc = np.asarray(rs_kpc, dtype=np.float64)
 
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        x = d_earth_kpc * np.tan(theta_rad) / rs_kpc
-        radial_factor = 1.0 - 1.0 / (1.0 + x) ** 3
-        jtheta = js * radial_factor / (7.0 / 8.0)
+        y = (
+            d_earth_kpc
+            * np.sin(alpha_int_rad)
+            / rs_kpc
+        )
 
-    jtheta = np.asarray(jtheta, dtype=np.float64)
-    jtheta[~np.isfinite(jtheta)] = 0.0
-    jtheta[jtheta < 0.0] = 0.0
+        projected_fraction = projected_nfw_fraction(y)
 
-    return jtheta
+        j_pixel_proxy = (
+            js
+            * projected_fraction
+            * omega_pixel
+            / omega_aperture
+        )
 
+    j_pixel_proxy = np.asarray(j_pixel_proxy, dtype=np.float64)
+    j_pixel_proxy[~np.isfinite(j_pixel_proxy)] = 0.0
+    j_pixel_proxy[j_pixel_proxy < 0.0] = 0.0
+
+    return j_pixel_proxy
 
 def build_valid_mask(js, d_earth, theta_s, r_s, rho_s, x_e, y_e, z_e):
     """Return the validity mask used consistently in both HDF5 passes."""
@@ -638,7 +755,7 @@ def compute_pixel_reference(
     column_indices,
     n_total,
     theta_min_deg,
-    theta_aperture_deg,
+    nside,
     chunk_size,
     progress_label=None,
 ):
@@ -646,7 +763,7 @@ def compute_pixel_reference(
     Compute the diagnostic-inspired brightest theoretical pixel reference.
 
     Pointlike halos enter with J_pixel_proxy = Js.
-    Extended halos enter with J_pixel_proxy = J_theta(theta_aperture).
+    Extended halos enter with the corrected-CLUMPY central-pixel proxy.
     """
 
     brightest_pointlike = 0.0
@@ -684,13 +801,13 @@ def compute_pixel_reference(
             brightest_pointlike = max(brightest_pointlike, local_max)
 
         if np.any(mask_extended):
-            ext_jtheta = jtheta_from_js(
+            ext_pixel_proxy = clumpy_central_pixel_proxy_from_js(
                 js=js[mask_extended],
                 d_earth_kpc=d_earth[mask_extended],
                 rs_kpc=r_s[mask_extended],
-                theta_aperture_deg=theta_aperture_deg,
+                nside=nside,
             )
-            local_max = float(np.nanmax(ext_jtheta))
+            local_max = float(np.nanmax(ext_pixel_proxy))
             brightest_extended = max(brightest_extended, local_max)
 
         if progress_label is not None:
@@ -773,12 +890,17 @@ def prepare_subhalo_components(
     if pointlike_cut_f is not None and pointlike_cut_f < 0.0:
         raise ValueError("pointlike_cut_f must be non-negative.")
 
-    if cuts_enabled:
-        if theta_aperture_deg is None:
-            theta_aperture_deg = 0.5 * theta_min_deg
+    alpha_int_rad = float(hp.max_pixrad(nside))
+    alpha_int_deg = float(np.rad2deg(alpha_int_rad))
 
-        if theta_aperture_deg <= 0.0:
-            raise ValueError("theta_aperture_deg must be positive.")
+    if theta_aperture_deg is not None:
+        raise ValueError(
+            "--theta-aperture-deg is deprecated. The aperture is now "
+            "derived automatically as hp.max_pixrad(NSIDE)."
+        )
+
+    # Keep this internal name temporarily for backward-compatible metadata.
+    theta_aperture_deg = alpha_int_deg
 
     group_name = f"iteration_{iteration}"
 
@@ -897,7 +1019,10 @@ def prepare_subhalo_components(
 
         if cuts_enabled:
             print("Subhalo cuts: enabled")
-            print(f"Theta aperture: {theta_aperture_deg:.6f} deg")
+            print(
+                "CLUMPY integration aperture: "
+                f"{theta_aperture_deg:.12f} deg"
+            )
             print(f"Extended cut fraction: {extended_cut_f}")
             print(f"Pointlike cut fraction: {pointlike_cut_f}")
             print("Computing theoretical brightest pixel reference...")
@@ -907,7 +1032,7 @@ def prepare_subhalo_components(
                 column_indices=column_indices,
                 n_total=n_total,
                 theta_min_deg=theta_min_deg,
-                theta_aperture_deg=theta_aperture_deg,
+                nside=nside,
                 chunk_size=chunk_size,
             )
 
@@ -995,13 +1120,17 @@ def prepare_subhalo_components(
                 mask_pointlike_kept = mask_pointlike
 
                 if extended_j_cut is not None and np.any(mask_extended):
-                    ext_jtheta = jtheta_from_js(
-                        js=js[mask_extended],
-                        d_earth_kpc=d_earth[mask_extended],
-                        rs_kpc=r_s[mask_extended],
-                        theta_aperture_deg=theta_aperture_deg,
+                    ext_pixel_proxy = (
+                        clumpy_central_pixel_proxy_from_js(
+                            js=js[mask_extended],
+                            d_earth_kpc=d_earth[mask_extended],
+                            rs_kpc=r_s[mask_extended],
+                            nside=nside,
+                        )
                     )
-                    local_ext_keep = ext_jtheta >= extended_j_cut
+                    local_ext_keep = (
+                        ext_pixel_proxy >= extended_j_cut
+                    )
                     mask_extended_kept = np.zeros_like(mask_extended)
                     mask_extended_kept[np.flatnonzero(mask_extended)] = (
                         local_ext_keep

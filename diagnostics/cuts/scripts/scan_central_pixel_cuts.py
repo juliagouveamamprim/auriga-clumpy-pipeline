@@ -22,7 +22,7 @@ from scripts.prepare_subhalo_components import (  # noqa: E402
     compute_pixel_reference,
     get_input_h5,
     healpix_pixel_size_deg,
-    jtheta_from_js,
+    clumpy_central_pixel_proxy_from_js,
     round_up,
     xyz_to_lb_deg,
 )
@@ -113,8 +113,8 @@ def parse_args():
         type=float,
         default=None,
         help=(
-            "Aperture used for the extended central-pixel proxy. "
-            "Default: half the rounded pointlike/extended threshold."
+            "Deprecated. The extended proxy now uses the CLUMPY "
+            "aperture hp.max_pixrad(NSIDE), derived automatically."
         ),
     )
 
@@ -264,13 +264,18 @@ def main():
         decimals=ROUND_UP_DECIMALS,
     )
 
-    theta_aperture_deg = args.theta_aperture_deg
+    if args.theta_aperture_deg is not None:
+        raise ValueError(
+            "--theta-aperture-deg is deprecated. The aperture is now "
+            "derived automatically as hp.max_pixrad(NSIDE)."
+        )
 
-    if theta_aperture_deg is None:
-        theta_aperture_deg = 0.5 * theta_min_deg
+    alpha_int_rad = float(hp.max_pixrad(args.nside))
+    alpha_int_deg = float(np.rad2deg(alpha_int_rad))
 
-    if theta_aperture_deg <= 0.0:
-        raise ValueError("theta-aperture-deg must be positive.")
+    # Retain the old CSV field name temporarily for compatibility
+    # with the multi-repopulation aggregation script.
+    theta_aperture_deg = alpha_int_deg
 
     npix = hp.nside2npix(args.nside)
 
@@ -321,7 +326,10 @@ def main():
     print(f"NPIX: {npix:,}")
     print(f"Pixel size sqrt(area): {theta_pix_deg:.8f} deg")
     print(f"Pointlike/extended threshold: {theta_min_deg:.8f} deg")
-    print(f"Extended aperture: {theta_aperture_deg:.8f} deg")
+    print(
+        "CLUMPY integration aperture: "
+        f"{theta_aperture_deg:.12f} deg"
+    )
     print(f"Pointlike f values: {pointlike_f_values}")
     print(f"Extended f values: {extended_f_values}")
     print(
@@ -404,7 +412,7 @@ def main():
             column_indices=column_indices,
             n_total=n_total,
             theta_min_deg=theta_min_deg,
-            theta_aperture_deg=theta_aperture_deg,
+            nside=args.nside,
             chunk_size=args.chunk_size,
             progress_label="Reference scan",
         )
@@ -553,11 +561,13 @@ def main():
             if np.any(mask_extended):
                 extended_js = js[mask_extended]
 
-                extended_jtheta = jtheta_from_js(
-                    js=extended_js,
-                    d_earth_kpc=d_earth[mask_extended],
-                    rs_kpc=r_s[mask_extended],
-                    theta_aperture_deg=theta_aperture_deg,
+                extended_pixel_proxy = (
+                    clumpy_central_pixel_proxy_from_js(
+                        js=extended_js,
+                        d_earth_kpc=d_earth[mask_extended],
+                        rs_kpc=r_s[mask_extended],
+                        nside=args.nside,
+                    )
                 )
 
                 extended_lon, extended_lat = xyz_to_lb_deg(
@@ -577,7 +587,7 @@ def main():
                 add_weighted_pixels(
                     extended_full,
                     extended_pixel,
-                    extended_jtheta,
+                    extended_pixel_proxy,
                 )
 
                 add_extended_envelope_maps(
@@ -587,11 +597,11 @@ def main():
                     lon_deg=extended_lon,
                     lat_deg=extended_lat,
                     theta_s_deg=theta_s[mask_extended],
-                    weights=extended_jtheta,
+                    weights=extended_pixel_proxy,
                 )
 
                 for f_value, j_cut in extended_cuts.items():
-                    discarded = extended_jtheta < j_cut
+                    discarded = extended_pixel_proxy < j_cut
 
                     if not np.any(discarded):
                         continue
@@ -599,14 +609,14 @@ def main():
                     add_weighted_pixels(
                         extended_discarded_maps[f_value],
                         extended_pixel[discarded],
-                        extended_jtheta[discarded],
+                        extended_pixel_proxy[discarded],
                     )
 
                     extended_discarded_counts[f_value] += int(
                         np.count_nonzero(discarded)
                     )
                     extended_discarded_sums[f_value] += float(
-                        extended_jtheta[discarded].sum(dtype=np.float64)
+                        extended_pixel_proxy[discarded].sum(dtype=np.float64)
                     )
 
             print(

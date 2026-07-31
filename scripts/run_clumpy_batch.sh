@@ -19,7 +19,6 @@ Environment variables:
   NSIDE                 HEALPix NSIDE inherited by one-case runs (default: 1024)
   EXTENDED_CUT_F        Extended cut factor inherited by one-case runs (default: none)
   POINTLIKE_CUT_F       Pointlike cut factor inherited by one-case runs (default: none)
-  THETA_APERTURE_DEG    Aperture for extended cut inherited by one-case runs
   CLUMPY_EXECUTABLE     CLUMPY executable or wrapper inherited by one-case runs
   PYTHON_EXECUTABLE     Python executable inherited by one-case runs
 
@@ -47,9 +46,8 @@ DEFAULT_NSIDE=1024
 NSIDE="${NSIDE:-${DEFAULT_NSIDE}}"
 EXTENDED_CUT_F="${EXTENDED_CUT_F:-}"
 POINTLIKE_CUT_F="${POINTLIKE_CUT_F:-}"
-THETA_APERTURE_DEG="${THETA_APERTURE_DEG:-}"
 
-export NSIDE EXTENDED_CUT_F POINTLIKE_CUT_F THETA_APERTURE_DEG
+export NSIDE EXTENDED_CUT_F POINTLIKE_CUT_F
 
 for value_name in START_ID END_ID MAX_JOBS POLL_SECONDS LAUNCH_DELAY_SECONDS; do
     value="${!value_name}"
@@ -121,7 +119,7 @@ echo "NSIDE:            ${NSIDE}"
 echo "Cuts:"
 echo "  EXTENDED_CUT_F:      ${EXTENDED_CUT_F:-none}"
 echo "  POINTLIKE_CUT_F:     ${POINTLIKE_CUT_F:-none}"
-echo "  THETA_APERTURE_DEG:  ${THETA_APERTURE_DEG:-default}"
+echo "  Extended aperture:   hp.max_pixrad(NSIDE), derived automatically"
 echo "One-case script:  ${ONE_CASE_SCRIPT}"
 echo "Batch log dir:    ${BATCH_LOG_DIR}"
 echo "================================================================================"

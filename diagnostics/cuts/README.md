@@ -7,7 +7,16 @@ Catalogue-wise diagnostics used to select pointlike and extended subhalo cuts fo
 The script `scripts/scan_central_pixel_cuts.py` builds a combined HEALPix proxy map using:
 
 - `Js` in the source pixel for pointlike halos;
-- `Jtheta` in the central pixel for extended halos.
+- the projected, CLUMPY-like central-pixel proxy for extended halos.
+
+For extended halos, the proxy uses the circular integration aperture
+
+    alpha_int = hp.max_pixrad(NSIDE)
+
+and the exact projected NFW-squared fraction for a profile truncated at
+`r_s`, followed by the CLUMPY aperture-to-pixel area rescaling. See
+`../central_pixel_validation/README.md` for the complete derivation and
+validation.
 
 For each pair `(pointlike_f, extended_f)`, the cuts are defined by:
 
@@ -29,7 +38,7 @@ The conservative `theta-s` envelope can be enabled with:
 
     --extended-envelope-modes theta-s
 
-For each discarded extended halo, the same `Jtheta` contribution is
+For each discarded extended halo, the same extended central-pixel proxy contribution is
 repeated in every HEALPix pixel intersected by a disc of radius
 `theta_s`. This is an intentionally extreme stress test; `theta_s` is a
 characteristic angular scale, not a physical outer boundary.
@@ -38,7 +47,7 @@ The central-pixel result and the `theta-s` envelope are stored as
 separate pixel-wise metrics.
 
 The envelope is not a physical rendered map. It deliberately repeats
-the same `Jtheta` contribution across multiple pixels and must not be
+the same extended central-pixel proxy contribution across multiple pixels and must not be
 used for integrated or cumulative J-factor quantities. All integrated
 quantities in the CSV continue to use the central-pixel proxy only.
 
@@ -75,7 +84,7 @@ Existing compatible individual CSV files are reused by default. Use
 After all scans, the driver produces:
 
 - a combined CSV containing every individual result;
-- a summary CSV grouped by scenario, NSIDE, `Jtheta` aperture, envelope
+- a summary CSV grouped by scenario, NSIDE, CLUMPY integration aperture, envelope
   mode, and pair of cut fractions.
 
 For each numerical diagnostic, the summary records:
@@ -102,7 +111,6 @@ A ten-repopulation production scanning
         --nside 2048 \
         --pointlike-f-values 1e-2,1e-3,1e-4,1e-5 \
         --extended-f-values 1e-2,1e-3,1e-4,1e-5 \
-        --theta-aperture-deg 0.015 \
         --extended-envelope-modes theta-s
 
 Use `--aggregate-only` to regenerate the combined and summary CSV files
@@ -142,28 +150,31 @@ Example:
 The generated figures and the large combined scan tables should not be
 committed to the repository.
 
-## Adopted NSIDE=2048 cuts
+## Status of the NSIDE=2048 cuts
 
-The final cut selection uses:
+The earlier scan used
 
-    NSIDE = 2048
     theta_aperture_deg = 0.015
-    pointlike_f = 1e-3
-    extended_f = 1e-3
-    extended_envelope_mode = theta-s
 
-The selection is based on ten repopulations for each disruption
-scenario. Among the tested symmetric cuts, `f = 1e-3` is the largest
-value for which the conservative worst-case discarded-map peak remains
-below 1% of the final-map peak in both scenarios.
+together with a three-dimensional radial approximation for the extended
+central-pixel contribution.
 
-The maximum ratios across the ten repopulations are:
+The central-pixel validation showed that this quantity did not reproduce
+the value assigned by corrected CLUMPY. The scan scripts now use the
+projected NFW-squared fraction, the exact CLUMPY aperture
 
-- fragile: `1.967e-3` (`0.1967%`);
-- resilient: `8.505e-3` (`0.8505%`).
+    alpha_int = hp.max_pixrad(NSIDE),
 
-The corresponding mean total-catalogue reduction factors are
-approximately `4547.4` for fragile and `1043.5` for resilient.
+and the aperture-to-pixel solid-angle rescaling.
 
-These values define the catalogue cuts to be used for the subsequent
-NSIDE=2048 CLUMPY validation and production runs.
+Consequently, the previous numerical result
+
+    pointlike_f = extended_f = 1e-3
+
+and its quoted loss and catalogue-reduction values must be treated as
+legacy results. They remain useful for documenting the previous
+diagnostic, but they should not be used to freeze the production cuts.
+
+The multi-repopulation scan must be rerun with the corrected proxy.
+Final cut values will be recorded here only after the new fragile and
+resilient results have been checked.
