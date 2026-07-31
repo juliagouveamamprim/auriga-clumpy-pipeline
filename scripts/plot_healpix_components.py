@@ -181,7 +181,7 @@ def plot_one(
         min=vmin,
         max=vmax,
         cmap="magma",
-        badcolor="white",
+        badcolor="#000004",
         bgcolor="white",
         cbar=True,
         hold=True,
@@ -220,10 +220,9 @@ def plot_panel(prepared, limits, output_path):
             min=vmin,
             max=vmax,
             cmap="magma",
-            badcolor="white",
+            badcolor="#000004",
             bgcolor="white",
             cbar=True,
-            hold=True,
         )
 
         hp.graticule(
