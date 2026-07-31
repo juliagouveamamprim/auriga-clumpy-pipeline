@@ -22,38 +22,38 @@ The pointlike/extended classification was not changed by this work.
 
 The masks remain
 
-\[
+$
 \theta_s < \theta_{\min}
 \quad\Longrightarrow\quad
 \text{pointlike},
-\]
+$
 
 and
 
-\[
+$
 \theta_s \geq \theta_{\min}
 \quad\Longrightarrow\quad
 \text{extended},
-\]
+$
 
 where
 
-\[
+$
 \theta_{\min}
 =
 \operatorname{round\_up}
 \left(
 \sqrt{\Omega_{\rm pix}}
 \right).
-\]
+$
 
 For `NSIDE=2048`,
 
-\[
+$
 \sqrt{\Omega_{\rm pix}}\simeq 0.0286^\circ,
 \qquad
 \theta_{\min}=0.03^\circ.
-\]
+$
 
 The new aperture definition described below is used only after a halo
 has already been classified as extended.
@@ -62,41 +62,41 @@ has already been classified as extended.
 
 The previous implementation estimated the central-pixel contribution as
 
-\[
+$
 J_{\rm old}
 =
 J_s
 \frac{1-(1+x)^{-3}}{7/8},
-\]
+$
 
 with
 
-\[
+$
 x=
 \frac{D_{\rm Earth}\tan\theta_{\rm aperture}}{r_s}.
-\]
+$
 
 The HDF5 quantity `Js` is the annihilation J-factor integrated up to
 \(r_s\). For an NFW profile truncated at \(r_s\), the old expression
 used
 
-\[
+$
 J_s = \frac{7}{8}J_{\rm general}.
-\]
+$
 
 When no aperture was supplied, the pipeline set
 
-\[
+$
 \theta_{\rm aperture}
 =
 \frac{\theta_{\min}}{2}.
-\]
+$
 
 At `NSIDE=2048`, this gave
 
-\[
+$
 \theta_{\rm aperture}=0.015^\circ.
-\]
+$
 
 ## Why the previous expression was incorrect
 
@@ -106,9 +106,9 @@ Three independent issues were identified.
 
 The factor
 
-\[
+$
 1-(1+x)^{-3}
-\]
+$
 
 is the cumulative annihilation luminosity inside a three-dimensional
 sphere.
@@ -161,17 +161,17 @@ CLUMPY evaluates a J-factor integrated in a circular aperture of radius
 \(\alpha_{\rm int}\), then rescales it from the circular-aperture solid
 angle to the HEALPix pixel solid angle:
 
-\[
+$
 \frac{\Omega_{\rm pix}}{\Omega_{\rm aperture}},
-\]
+$
 
 where
 
-\[
+$
 \Omega_{\rm aperture}
 =
 2\pi\left(1-\cos\alpha_{\rm int}\right).
-\]
+$
 
 This area factor was absent from the previous proxy.
 
@@ -201,17 +201,17 @@ rho-normalization correction.
 For the ten selected halos, the corrected CLUMPY central pixel divided
 by the old proxy had
 
-\[
+$
 \mathrm{median}=0.653053,
-\]
+$
 
 with range
 
-\[
+$
 0.527833 \leq
 \frac{J_{\rm CLUMPY}}{J_{\rm old}}
 \leq 0.753297.
-\]
+$
 
 The old expression therefore systematically overestimated the central
 pixel.
@@ -225,9 +225,9 @@ Instead, for each pixel centre, it evaluates the halo radial angular
 profile, where each tabulated value corresponds to a circular aperture
 of radius `gSIM_ALPHAINT`. The map is subsequently rescaled by
 
-\[
+$
 \Omega_{\rm pix}/\Omega_{\rm aperture}.
-\]
+$
 
 A CLUMPY-like analytic calculation was therefore constructed with:
 
@@ -242,17 +242,17 @@ A CLUMPY-like analytic calculation was therefore constructed with:
 For the centred proxy, the corrected CLUMPY central pixel divided by the
 analytic CLUMPY-like value had
 
-\[
+$
 \mathrm{median}=1.026056,
-\]
+$
 
 with range
 
-\[
+$
 0.962042 \leq
 \frac{J_{\rm CLUMPY}}{J_{\rm proxy}}
 \leq 1.120343.
-\]
+$
 
 Nine of the ten test halos agreed within approximately 6%. The largest
 difference occurred for a poorly resolved halo that touched only 17
@@ -267,24 +267,24 @@ catalogue-cut proxy. The proxy can depend only on `Js`, `D_Earth`,
 
 Define
 
-\[
+$
 y=
 \frac{D_{\rm Earth}\sin\alpha_{\rm int}}{r_s}.
-\]
+$
 
 For an NFW profile truncated at \(r_s\), the fraction of `Js` contained
 inside a centred projected circular aperture is
 
-\[
+$
 F_{\rm proj}(y)
 =
 1-\frac{24}{7}G(y),
 \qquad 0<y<1,
-\]
+$
 
 where
 
-\[
+$
 G(y)
 =
 -y\arccos y
@@ -295,15 +295,15 @@ G(y)
 }{
 24(1-y^2)^{5/2}
 }.
-\]
+$
 
 The boundary values are
 
-\[
+$
 F_{\rm proj}(0)=0,
 \qquad
 F_{\rm proj}(y\geq1)=1.
-\]
+$
 
 Series expansions are used close to \(y=0\) and \(y=1\) to prevent
 catastrophic cancellation.
@@ -311,23 +311,23 @@ catastrophic cancellation.
 The closed form was checked against the direct numerical projected NFW
 integration for the ten validation halos. The ratio was
 
-\[
+$
 \mathrm{median}
 \left(
 \frac{J_{\rm closed}}{J_{\rm numerical}}
 \right)
 =1.00001861,
-\]
+$
 
 with range
 
-\[
+$
 1.00001629
 \leq
 \frac{J_{\rm closed}}{J_{\rm numerical}}
 \leq
 1.00003093.
-\]
+$
 
 This confirms that the closed form reproduces the numerical projected
 integral at substantially better precision than required for the
@@ -337,9 +337,9 @@ Merely replacing \(0.015^\circ\) by \(0.0299^\circ\) in the old radial
 formula and adding the area rescaling was not sufficient. That simple
 variant underestimated CLUMPY, with median
 
-\[
+$
 \frac{J_{\rm CLUMPY}}{J_{\rm simple}}\simeq1.260.
-\]
+$
 
 The projected fraction itself is therefore essential.
 
@@ -347,57 +347,57 @@ The projected fraction itself is therefore essential.
 
 For extended halos, the catalogue-level central-pixel proxy is now
 
-\[
+$
 J_{\rm pixel,proxy}^{\rm ext}
 =
 J_s
 F_{\rm proj}(y)
 \frac{\Omega_{\rm pix}}{\Omega_{\rm aperture}},
-\]
+$
 
 with
 
-\[
+$
 y=
 \frac{
 D_{\rm Earth}\sin[\texttt{hp.max\_pixrad(NSIDE)}]
 }{
 r_s
 }.
-\]
+$
 
 For pointlike halos, the proxy remains
 
-\[
+$
 J_{\rm pixel,proxy}^{\rm point}=J_s.
-\]
+$
 
 The common reference is
 
-\[
+$
 J_{\rm pixel,ref}
 =
 \max\left[
 \max(J_s^{\rm point}),
 \max(J_{\rm pixel,proxy}^{\rm ext})
 \right].
-\]
+$
 
 The cut thresholds remain
 
-\[
+$
 J_{\rm cut}^{\rm point}
 =
 f_{\rm point}J_{\rm pixel,ref},
-\]
+$
 
 and
 
-\[
+$
 J_{\rm cut}^{\rm ext}
 =
 f_{\rm ext}J_{\rm pixel,ref}.
-\]
+$
 
 ## Computational cost
 
