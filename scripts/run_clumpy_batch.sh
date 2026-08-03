@@ -220,7 +220,7 @@ for repop_id in $(seq "${START_ID}" "${END_ID}"); do
     printf -v repop_tag "repop_%04d" "${repop_id}"
 
     for scenario in "${SCENARIOS[@]}"; do
-        final_fits="${REPO_ROOT}/outputs/clumpy/${scenario}/outputs/total/${repop_tag}/auriga_total_nside${NSIDE}.fits"
+        final_fits="${REPO_ROOT}/outputs/clumpy/${scenario}/outputs/total/${repop_tag}_nside${NSIDE}/auriga_total_nside${NSIDE}.fits"
 
         if [[ "${SKIP_COMPLETED}" == "1" && -s "${final_fits}" ]]; then
             echo "Skipping completed ${repop_tag} ${scenario}"
