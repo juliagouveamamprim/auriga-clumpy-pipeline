@@ -13,7 +13,7 @@ from astropy.io import fits
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 BASE_RUN_DIR = REPOSITORY_ROOT / "outputs" / "clumpy"
 
-DEFAULT_NSIDE = 1024
+DEFAULT_NSIDE = 2048
 
 
 def parse_args():
@@ -37,7 +37,7 @@ def parse_args():
 
 
 def nside_suffix(nside):
-    return "" if nside == DEFAULT_NSIDE else f"_nside{nside}"
+    return f"_nside{nside}"
 
 
 def clumpy_repop_dir(repop_tag, nside):
@@ -71,7 +71,7 @@ def get_paths(repop_id, scenario, nside):
         scenario_dir
         / "outputs"
         / "total"
-        / repop_tag
+        / output_repop_dir
         / f"auriga_total_nside{nside}.fits"
     )
 

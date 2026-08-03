@@ -13,12 +13,12 @@ Usage
 This script reads:
 
     outputs/clumpy/<scenario>/lists/raw/
-        repop_XXXX_raw_nopointlike.txt
+        repop_XXXX_raw_nopointlike_nside<NSIDE>.txt
 
 and the corresponding CLUMPY raw rendered-halo log:
 
     outputs/clumpy/<scenario>/outputs/raw_clumpy/
-        repop_XXXX/annihil_gal2D_LOS0_0_FOV360x180_nside1024.halo_rendered.log
+        repop_XXXX_nside<NSIDE>/annihil_gal2D_LOS0_0_FOV360x180_nside<NSIDE>.halo_rendered.log
 
 It computes, halo by halo:
 
@@ -36,7 +36,7 @@ because J scales as rho_s^2.
 The corrected list is written to:
 
     outputs/clumpy/<scenario>/lists/corrected/
-        repop_XXXX_rhocorr.txt
+        repop_XXXX_rhocorr_nside<NSIDE>.txt
 """
 
 import argparse
@@ -55,7 +55,7 @@ import matplotlib.pyplot as plt
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 BASE_RUN_DIR = REPOSITORY_ROOT / "outputs" / "clumpy"
 
-DEFAULT_NSIDE = 1024
+DEFAULT_NSIDE = 2048
 
 # Conversion factor:
 # [Msun^2 / kpc^5] -> [GeV^2 / cm^5]
@@ -88,8 +88,8 @@ def parse_args():
         type=int,
         default=DEFAULT_NSIDE,
         help=(
-            "HEALPix NSIDE of the raw CLUMPY run. The default keeps "
-            "the historical NSIDE=1024 filenames."
+            "HEALPix NSIDE of the raw CLUMPY run. "
+            "Output filenames always include the NSIDE value."
         ),
     )
 
@@ -101,7 +101,7 @@ def parse_args():
 # ============================================================
 
 def nside_suffix(nside):
-    return "" if nside == DEFAULT_NSIDE else f"_nside{nside}"
+    return f"_nside{nside}"
 
 
 def clumpy_repop_dir(repop_tag, nside):

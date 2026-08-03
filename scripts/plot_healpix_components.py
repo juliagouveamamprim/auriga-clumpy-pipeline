@@ -18,7 +18,7 @@ from astropy.io import fits
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 BASE_RUN_DIR = REPOSITORY_ROOT / "outputs" / "clumpy"
-DEFAULT_NSIDE = 1024
+DEFAULT_NSIDE = 2048
 
 COMPONENTS = {
     "smooth": ("Jsmooth_per_sr", "Smooth Milky Way"),
@@ -65,13 +65,14 @@ def parse_args():
 
 def get_paths(repop_id, scenario, nside):
     repop_tag = f"repop_{repop_id:04d}"
+    output_repop_dir = f"{repop_tag}_nside{nside}"
 
     input_fits = (
         BASE_RUN_DIR
         / scenario
         / "outputs"
         / "total"
-        / repop_tag
+        / output_repop_dir
         / f"auriga_total_nside{nside}.fits"
     )
 
@@ -79,7 +80,7 @@ def get_paths(repop_id, scenario, nside):
         BASE_RUN_DIR
         / scenario
         / "plots"
-        / repop_tag
+        / output_repop_dir
     )
 
     return input_fits, output_dir

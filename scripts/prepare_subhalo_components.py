@@ -18,10 +18,10 @@ This reads:
 and writes:
 
     outputs/clumpy/<scenario>/lists/raw/
-        repop_0001_raw_nopointlike.txt
+        repop_0001_raw_nopointlike_nside<NSIDE>.txt
 
     outputs/clumpy/<scenario>/pointlike/
-        repop_0001_pointlike_nside1024.fits
+        repop_0001_pointlike_nside<NSIDE>.fits
 
 Expected HDF5 structure
 -----------------------
@@ -83,11 +83,11 @@ TOP_N = None
 HALO_TYPE = "DSPH"
 
 # HEALPix map resolution used to define the point-like cut.
-NSIDE = 1024
+NSIDE = 2048
 
 # Number of decimal places used when rounding theta_pix upward.
-# Example: if theta_pix = 0.05726 deg and ROUND_UP_DECIMALS = 2,
-# then theta_min_deg = 0.06 deg.
+# Example: if theta_pix = 0.02863 deg and ROUND_UP_DECIMALS = 2,
+# then theta_min_deg = 0.03 deg.
 ROUND_UP_DECIMALS = 2
 
 # Number of HDF5 rows read at a time.
@@ -195,13 +195,10 @@ def get_output_list(repop_id, scenario, top_n, nside=NSIDE):
     """
     Return output CLUMPY raw list path.
 
-    The default NSIDE keeps the historical filename. Non-default NSIDE values
-    are included to avoid overwriting lists made with a different angular cut.
+    The NSIDE value is always included in the filename to prevent products
+    generated at different resolutions from overwriting one another.
     """
-    base = f"repop_{repop_id:04d}_raw_nopointlike"
-
-    if nside != NSIDE:
-        base += f"_nside{nside}"
+    base = f"repop_{repop_id:04d}_raw_nopointlike_nside{nside}"
 
     if top_n is not None:
         base += f"_top{top_n}"

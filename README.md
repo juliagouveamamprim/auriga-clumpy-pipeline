@@ -69,20 +69,20 @@ scripts/prepare_subhalo_components.py
 For the default resolution:
 
 ```text
-NSIDE = 1024
+NSIDE = 2048
 ```
 
-the equivalent HEALPix pixel size is approximately `0.057258 deg`. The threshold is rounded conservatively to:
+the equivalent HEALPix pixel size is approximately `0.028629 deg`. The threshold is rounded conservatively to:
 
 ```text
-theta_cut = 0.06 deg
+theta_cut = 0.03 deg
 ```
 
 The classification is:
 
 ```text
-extended:  theta_s >= 0.06 deg
-pointlike: theta_s <  0.06 deg
+extended:  theta_s >= 0.03 deg
+pointlike: theta_s <  0.03 deg
 ```
 
 Both components are generated during the same chunked pass through the HDF5 catalog. 
@@ -93,7 +93,7 @@ The extended halos are written to:
 
 ```text
 outputs/clumpy/<scenario>/lists/raw/
-    repop_XXXX_raw_nopointlike.txt
+    repop_XXXX_raw_nopointlike_nside<NSIDE>.txt
 ```
 
 The CLUMPY list format is:
@@ -130,7 +130,7 @@ The output is:
 
 ```text
 outputs/clumpy/<scenario>/pointlike/
-    repop_XXXX_pointlike_nside1024.fits
+    repop_XXXX_pointlike_nside<NSIDE>.fits
 ```
 
 The map uses:
@@ -172,7 +172,7 @@ The extended component is processed in two stages.
 The raw run uses the original halo normalizations and writes its products under:
 
 ```text
-outputs/clumpy/<scenario>/outputs/raw_clumpy/repop_XXXX/
+outputs/clumpy/<scenario>/outputs/raw_clumpy/repop_XXXX_nside<NSIDE>/
 ```
 
 The correction step requires a patched CLUMPY installation that produces:
@@ -213,7 +213,7 @@ The corrected list is written to:
 
 ```text
 outputs/clumpy/<scenario>/lists/corrected/
-    repop_XXXX_rhocorr.txt
+    repop_XXXX_rhocorr_nside<NSIDE>.txt
 ```
 
 ### Corrected run
@@ -221,7 +221,7 @@ outputs/clumpy/<scenario>/lists/corrected/
 The corrected CLUMPY map is written under:
 
 ```text
-outputs/clumpy/<scenario>/outputs/corrected_clumpy/repop_XXXX/
+outputs/clumpy/<scenario>/outputs/corrected_clumpy/repop_XXXX_nside<NSIDE>/
 ```
 
 It contains the smooth Milky Way halo and corrected extended subhalos. The pointlike component is added in the next stage.
@@ -247,8 +247,8 @@ The smooth component is not added twice.
 The final product is:
 
 ```text
-outputs/clumpy/<scenario>/outputs/total/repop_XXXX/
-    auriga_total_nside1024.fits
+outputs/clumpy/<scenario>/outputs/total/repop_XXXX_nside<NSIDE>/
+    auriga_total_nside<NSIDE>.fits
 ```
 
 The integrated-J HDU contains:
@@ -358,20 +358,18 @@ The executable must produce the patched halo-rendered log.
 
 ### NSIDE and optional subhalo cuts
 
-The CLUMPY wrappers accept the HEALPix resolution through the `NSIDE` environment variable. If `NSIDE` is not set, the default is `1024`.
+The CLUMPY wrappers accept the HEALPix resolution through the `NSIDE` environment variable. If `NSIDE` is not set, the default is `2048`.
 
-The default `NSIDE=1024` keeps the historical filenames, for example `repop_XXXX_raw_nopointlike.txt`, `repop_XXXX_rhocorr.txt`, and `auriga_total_nside1024.fits`.
+All resolution-dependent products include the `NSIDE` value in their filenames or directory names, including products generated with the default resolution. This prevents products made at different resolutions from overwriting one another.
 
-For non-default resolutions, intermediate CLUMPY lists and CLUMPY output directories include the `NSIDE` value to avoid overwriting default products. For example: `repop_XXXX_raw_nopointlike_nside2048.txt`, `repop_XXXX_rhocorr_nside2048.txt`, `outputs/raw_clumpy/repop_XXXX_nside2048/`, `outputs/corrected_clumpy/repop_XXXX_nside2048/`, and `auriga_total_nside2048.fits`.
-
-The pointlike FITS map always includes `NSIDE` in the filename: `repop_XXXX_pointlike_nside<NSIDE>.fits`.
+Examples include `repop_XXXX_raw_nopointlike_nside<NSIDE>.txt`, `repop_XXXX_rhocorr_nside<NSIDE>.txt`, `outputs/raw_clumpy/repop_XXXX_nside<NSIDE>/`, `outputs/corrected_clumpy/repop_XXXX_nside<NSIDE>/`, `repop_XXXX_pointlike_nside<NSIDE>.fits`, and `auriga_total_nside<NSIDE>.fits`.
 
 The extended/pointlike split is derived from the chosen `NSIDE`: `theta_pix_deg = healpix_pixel_size_deg(NSIDE)`, `theta_min_deg = round_up(theta_pix_deg)`, extended means `theta_s >= theta_min_deg`, and pointlike means `theta_s < theta_min_deg`.
 
 Optional cuts can be enabled, for example:
 
 ```bash
-EXTENDED_CUT_F=1e-3 POINTLIKE_CUT_F=1e-4 THETA_APERTURE_DEG=0.03 bash scripts/run_clumpy_one_case.sh 230 resilient
+EXTENDED_CUT_F=1e-3 POINTLIKE_CUT_F=1e-3 THETA_APERTURE_DEG=0.03 bash scripts/run_clumpy_one_case.sh 230 resilient
 ```
 
 The cut logic uses the same proxies as the diagnostics: pointlike uses `Js`, extended uses `J_theta(theta_aperture)`, and `Jref = max(max Js pointlike, max J_theta extended)`.
@@ -437,7 +435,7 @@ python3 scripts/plot_healpix_components.py 0 resilient
 It produces Mollweide maps for the smooth, extended, pointlike, and total components, together with a four-panel comparison under:
 
 ```text
-outputs/clumpy/<scenario>/plots/repop_XXXX/
+outputs/clumpy/<scenario>/plots/repop_XXXX_nside<NSIDE>/
 ```
 
 The plotted quantity is `log10(J / sr)`.

@@ -52,7 +52,7 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 BASE_RUN_DIR = REPOSITORY_ROOT / "outputs" / "clumpy"
 TEMPLATE_DIR = REPOSITORY_ROOT / "configs" / "clumpy_templates"
-DEFAULT_NSIDE = 1024
+DEFAULT_NSIDE = 2048
 
 TEMPLATE_NAME = (
     "clumpy_params_g6_auriga_nfw_{scenario}_renorm_vmin0p1.template.txt"
@@ -91,8 +91,8 @@ def parse_args():
         type=int,
         default=DEFAULT_NSIDE,
         help=(
-            "HEALPix NSIDE for the CLUMPY run. The default keeps the "
-            "historical NSIDE=1024 filenames."
+            "HEALPix NSIDE for the CLUMPY run. "
+            "Output filenames always include the NSIDE value."
         ),
     )
 
@@ -136,7 +136,7 @@ def replace_clumpy_line(line, key, new_value):
 
 
 def nside_suffix(nside):
-    return "" if nside == DEFAULT_NSIDE else f"_nside{nside}"
+    return f"_nside{nside}"
 
 
 def clumpy_repop_dir(repop_tag, nside):

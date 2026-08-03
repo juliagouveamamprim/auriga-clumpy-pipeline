@@ -74,10 +74,7 @@ if ! [[ "${NSIDE}" =~ ^[0-9]+$ ]] || (( NSIDE < 1 || (NSIDE & (NSIDE - 1)) != 0 
     exit 1
 fi
 
-NSIDE_SUFFIX=""
-if (( NSIDE != DEFAULT_NSIDE )); then
-    NSIDE_SUFFIX="_nside${NSIDE}"
-fi
+NSIDE_SUFFIX="_nside${NSIDE}"
 
 REPOP_RUN_TAG="${REPOP_TAG}${NSIDE_SUFFIX}"
 CLUMPY_BASENAME="annihil_gal2D_LOS0_0_FOV360x180_nside${NSIDE}"
