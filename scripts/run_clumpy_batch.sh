@@ -16,7 +16,7 @@ Environment variables:
   POLL_SECONDS          Seconds between concurrency checks (default: 60)
   LAUNCH_DELAY_SECONDS  Delay between launches (default: 5)
   SKIP_COMPLETED        Skip non-empty final total FITS files (default: 1)
-  NSIDE                 HEALPix NSIDE inherited by one-case runs (default: 1024)
+  NSIDE                 HEALPix NSIDE inherited by one-case runs (default: 2048)
   EXTENDED_CUT_F        Extended cut factor inherited by one-case runs (default: none)
   POINTLIKE_CUT_F       Pointlike cut factor inherited by one-case runs (default: none)
   CLUMPY_EXECUTABLE     CLUMPY executable or wrapper inherited by one-case runs
@@ -42,7 +42,7 @@ MAX_JOBS="${4:-8}"
 POLL_SECONDS="${POLL_SECONDS:-60}"
 LAUNCH_DELAY_SECONDS="${LAUNCH_DELAY_SECONDS:-5}"
 SKIP_COMPLETED="${SKIP_COMPLETED:-1}"
-DEFAULT_NSIDE=1024
+DEFAULT_NSIDE=2048
 NSIDE="${NSIDE:-${DEFAULT_NSIDE}}"
 EXTENDED_CUT_F="${EXTENDED_CUT_F:-}"
 POINTLIKE_CUT_F="${POINTLIKE_CUT_F:-}"
