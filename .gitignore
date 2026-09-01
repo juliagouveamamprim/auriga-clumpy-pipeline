@@ -27,6 +27,11 @@ logs/
 *.log
 progress_*.txt
 
+# Generated diagnostic products
+figures/
+diagnostics/cuts/plots/
+diagnostics/cuts/results_summary/
+
 # Temporary and editor files
 *.tmp
 *.swp
