@@ -144,8 +144,8 @@ def main():
             )
 
     colors = {
-        "fragile": "#0072B2",
-        "resilient": "#D55E00",
+        "fragile": "#EE3377",
+        "resilient": "#009988",
     }
     figure, axis = plt.subplots(figsize=(6.4, 4.3))
 
