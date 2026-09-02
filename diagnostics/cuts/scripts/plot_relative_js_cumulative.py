@@ -13,6 +13,9 @@ plt.rcParams.update(
     {
         "text.usetex": True,
         "font.family": "serif",
+        "axes.labelsize": 11,
+        "xtick.labelsize": 10.5,
+        "ytick.labelsize": 10.5,
     }
 )
 
@@ -207,13 +210,13 @@ def main():
             linewidth=1.3,
         )
     )
-    labels.append(r"99\% of subhalos (median CDF)")
+    labels.append(r"Median CDF $= 99\%$")
     axis.legend(
         handles,
         labels,
         frameon=False,
         loc="lower right",
-        fontsize=8,
+        fontsize=10,
     )
 
     figure.tight_layout()
