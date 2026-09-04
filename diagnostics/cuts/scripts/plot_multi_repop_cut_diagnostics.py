@@ -12,6 +12,19 @@ import pandas as pd
 from matplotlib.ticker import FuncFormatter, NullLocator
 
 
+plt.rcParams.update(
+    {
+        "text.usetex": True,
+        "font.family": "serif",
+        "axes.labelsize": 18,
+        "axes.titlesize": 18,
+        "xtick.labelsize": 16,
+        "ytick.labelsize": 16,
+        "legend.fontsize": 15.5,
+    }
+)
+
+
 REQUIRED_COLUMNS = {
     "scenario",
     "repop_id",
@@ -19,6 +32,7 @@ REQUIRED_COLUMNS = {
     "pointlike_f",
     "extended_f",
     "ratio_max_discarded_theta_s_envelope_to_final",
+    "fraction_discarded_js_to_full",
     "n_pointlike_total",
     "n_pointlike_kept",
     "n_pointlike_discarded",
@@ -85,7 +99,7 @@ def compact_count(value: float) -> str:
 
 
 def percent_tick(value: float, _position: float) -> str:
-    return f"{value:g}%"
+    return rf"{value:g}\%"
 
 
 def prepare_diagonal(table: pd.DataFrame) -> pd.DataFrame:
@@ -107,6 +121,10 @@ def prepare_diagonal(table: pd.DataFrame) -> pd.DataFrame:
         * diagonal[
             "ratio_max_discarded_theta_s_envelope_to_final"
         ].astype(float)
+    )
+    diagonal["integrated_discarded_percent"] = (
+        100.0
+        * diagonal["fraction_discarded_js_to_full"].astype(float)
     )
 
     for population in ("pointlike", "extended"):
@@ -161,264 +179,313 @@ def aggregate_retention(
     }
 
 
-def plot_scenario(
+def metric_matrix(
+    scenario_table: pd.DataFrame,
+    f_values: np.ndarray,
+    metric: str,
+) -> np.ndarray:
+    matrix = scenario_table.pivot(
+        index="repop_id",
+        columns="cut_f",
+        values=metric,
+    ).reindex(columns=f_values)
+
+    if matrix.isna().any().any():
+        raise ValueError(
+            f"Incomplete diagonal scan for metric {metric!r}."
+        )
+
+    return matrix.to_numpy(dtype=float)
+
+
+def plot_metric_distribution(
+    axis,
+    x: np.ndarray,
+    values: np.ndarray,
+    color: str,
+    label: str,
+) -> None:
+    lower = np.percentile(values, 16.0, axis=0)
+    mean = np.mean(values, axis=0)
+    upper = np.percentile(values, 84.0, axis=0)
+
+    for repop_values in values:
+        axis.plot(
+            x,
+            repop_values,
+            color=color,
+            linewidth=0.8,
+            alpha=0.18,
+            zorder=1,
+        )
+
+    axis.fill_between(
+        x,
+        lower,
+        upper,
+        color=color,
+        alpha=0.18,
+        linewidth=0.0,
+        zorder=2,
+    )
+    axis.plot(
+        x,
+        mean,
+        color=color,
+        marker="o",
+        linewidth=2.2,
+        label=label,
+        zorder=3,
+    )
+
+
+def plot_combined(
     diagonal: pd.DataFrame,
-    scenario: str,
     output_dir: Path,
     formats: list[str],
     dpi: int,
 ) -> None:
-    scenario_table = diagonal[
-        diagonal["scenario"].astype(str) == scenario
-    ].copy()
+    scenario_colors = {
+        "fragile": "#EE3377",
+        "resilient": "#009988",
+    }
+    scenario_order = ("fragile", "resilient")
 
-    if scenario_table.empty:
-        raise ValueError(f"No rows found for scenario {scenario!r}.")
+    available = set(diagonal["scenario"].astype(str).unique())
+    scenarios = [
+        scenario
+        for scenario in scenario_order
+        if scenario in available
+    ]
+    scenarios.extend(sorted(available.difference(scenarios)))
 
-    f_values = np.sort(scenario_table["cut_f"].unique())
+    if not scenarios:
+        raise ValueError("No scenarios were found in the diagonal scan.")
+
+    f_values = np.sort(diagonal["cut_f"].unique())
     x = np.arange(len(f_values), dtype=float) * 3.2
     x_left = x[0] - 1.35
     x_right = x[-1] + 1.35
 
-    impact = scenario_table.pivot(
-        index="repop_id",
-        columns="cut_f",
-        values="impact_percent",
-    ).reindex(columns=f_values)
-
-    if impact.isna().any().any():
-        raise ValueError(
-            f"Incomplete diagonal scan found for scenario {scenario!r}."
-        )
-
-    impact_values = impact.to_numpy(dtype=float)
-    impact_mean = np.mean(impact_values, axis=0)
-    impact_p16 = np.percentile(impact_values, 16.0, axis=0)
-    impact_p84 = np.percentile(impact_values, 84.0, axis=0)
-    retention = aggregate_retention(scenario_table, f_values)
-
-    mean_color = "#1F77B4"
-
-    fig, (ax_impact, ax_catalog) = plt.subplots(
-        nrows=2,
+    fig, (ax_impact, ax_catalog, ax_integrated) = plt.subplots(
+        nrows=3,
         ncols=1,
-        figsize=(11.5, 9.3),
-        gridspec_kw={"height_ratios": [1.15, 1.0]},
+        figsize=(11.5, 12.8),
+        sharex=True,
+        gridspec_kw={"height_ratios": [1.1, 1.0, 1.1]},
         constrained_layout=True,
     )
 
-    # Conservative combined impact.
-    for repop_values in impact_values:
-        ax_impact.plot(
-            x,
-            repop_values,
-            color="0.52",
-            linewidth=1.0,
-            alpha=0.70,
-            zorder=1,
+    all_impact_values = []
+    all_integrated_values = []
+    all_retention_values = []
+
+    for scenario in scenarios:
+        scenario_table = diagonal[
+            diagonal["scenario"].astype(str) == scenario
+        ].copy()
+
+        color = scenario_colors.get(scenario, "0.25")
+        scenario_label = scenario.capitalize()
+
+        impact_values = metric_matrix(
+            scenario_table,
+            f_values,
+            "impact_percent",
+        )
+        integrated_values = metric_matrix(
+            scenario_table,
+            f_values,
+            "integrated_discarded_percent",
         )
 
-    ax_impact.fill_between(
-        x,
-        impact_p16,
-        impact_p84,
-        color=mean_color,
-        alpha=0.20,
-        label="16–84% range",
-        zorder=2,
-    )
-    ax_impact.plot(
-        x,
-        impact_mean,
-        marker="o",
-        linewidth=2.1,
-        color=mean_color,
-        label="Mean over repopulations",
-        zorder=3,
-    )
+        plot_metric_distribution(
+            ax_impact,
+            x,
+            impact_values,
+            color,
+            f"{scenario_label} mean",
+        )
+        plot_metric_distribution(
+            ax_integrated,
+            x,
+            integrated_values,
+            color,
+            f"{scenario_label} mean",
+        )
+
+        all_impact_values.append(impact_values.ravel())
+        all_integrated_values.append(integrated_values.ravel())
+
+        retention = aggregate_retention(
+            scenario_table,
+            f_values,
+        )
+
+        for population, linestyle, marker in (
+            ("pointlike", "-", "o"),
+            ("extended", "--", "s"),
+        ):
+            kept_percent = retention[
+                f"{population}_kept_percent"
+            ]
+
+            ax_catalog.plot(
+                x,
+                kept_percent,
+                color=color,
+                linestyle=linestyle,
+                marker=marker,
+                linewidth=2.1,
+                label=(
+                    f"{scenario_label} "
+                    f"{population.capitalize()}"
+                ),
+                zorder=3,
+            )
+            all_retention_values.append(kept_percent)
+
+    impact_positive = np.concatenate(all_impact_values)
+    impact_positive = impact_positive[impact_positive > 0.0]
+
+    if impact_positive.size == 0:
+        raise ValueError("No positive map-impact values were found.")
+
     ax_impact.axhline(
         1.0,
         color="0.25",
         linewidth=1.4,
         linestyle="--",
-        label="1% threshold",
+        label=r"1\% threshold",
     )
     ax_impact.axhline(
         10.0,
         color="0.45",
         linewidth=1.2,
         linestyle="-.",
-        label="10% reference level",
+        label=r"10\% reference level",
     )
-
-    positive_min = np.min(impact_values[impact_values > 0.0])
-    upper_limit = max(15.0, 1.8 * np.max(impact_values))
-
     ax_impact.set_yscale("log")
-    ax_impact.set_ylim(0.5 * positive_min, upper_limit)
-    ax_impact.yaxis.set_major_formatter(FuncFormatter(percent_tick))
+    ax_impact.set_ylim(
+        0.5 * np.min(impact_positive),
+        max(15.0, 1.8 * np.max(impact_positive)),
+    )
+    ax_impact.yaxis.set_major_formatter(
+        FuncFormatter(percent_tick)
+    )
     ax_impact.set_ylabel(
         "Conservative discarded-map peak\n"
         "/ final-map peak"
     )
     ax_impact.set_title(
-        f"{scenario.capitalize()}: impact of discarded subhalos"
+        "Conservative map-level impact of discarded subhalos"
     )
     ax_impact.grid(True, which="both", alpha=0.25)
     ax_impact.legend(
         loc="lower right",
         ncol=2,
-        fontsize=9,
+        fontsize=15.5,
         frameon=True,
     )
-    ax_impact.set_xlim(x_left, x_right)
-    ax_impact.set_xticks(x)
-    ax_impact.set_xticklabels([])
-    ax_impact.xaxis.set_minor_locator(NullLocator())
 
-    # Catalog retention.
-    group_x = x
-    pair_offset = 0.18
-
-    pointlike_x = group_x - pair_offset
-    extended_x = group_x + pair_offset
-
-    pointlike_kept = retention["pointlike_kept_percent"]
-    extended_kept = retention["extended_kept_percent"]
-
-    pointlike_color = "#111111"
-    extended_color = "#D62728"
-
-    ax_catalog.plot(
-        pointlike_x,
-        pointlike_kept,
-        marker="o",
-        linewidth=2.0,
-        color=pointlike_color,
-        label="Pointlike",
-        zorder=3,
+    integrated_positive = np.concatenate(
+        all_integrated_values
     )
-    ax_catalog.plot(
-        extended_x,
-        extended_kept,
-        marker="s",
-        linewidth=2.0,
-        color=extended_color,
-        label="Extended",
-        zorder=3,
+    integrated_positive = integrated_positive[
+        integrated_positive > 0.0
+    ]
+
+    if integrated_positive.size == 0:
+        raise ValueError(
+            "No positive integrated-J values were found."
+        )
+
+    ax_integrated.set_yscale("log")
+    ax_integrated.set_ylim(
+        0.5 * np.min(integrated_positive),
+        max(110.0, 1.25 * np.max(integrated_positive)),
+    )
+    ax_integrated.yaxis.set_major_formatter(
+        FuncFormatter(percent_tick)
+    )
+    ax_integrated.set_ylabel(
+        "Discarded integrated $J_s$\n"
+        "/ full integrated $J_s$"
+    )
+    ax_integrated.set_title(
+        "Catalogue-integrated J-factor removed by the cut"
+    )
+    ax_integrated.grid(True, which="both", alpha=0.25)
+    ax_integrated.legend(
+        loc="lower right",
+        fontsize=15.5,
+        frameon=True,
     )
 
-    for population, positions, kept_percent, color, x_offset, alignment in (
-        (
-            "pointlike",
-            pointlike_x,
-            pointlike_kept,
-            pointlike_color,
-            -9,
-            "right",
-        ),
-        (
-            "extended",
-            extended_x,
-            extended_kept,
-            extended_color,
-            9,
-            "left",
-        ),
-    ):
-        kept_count = retention[f"{population}_kept_count"]
-        discarded_count = retention[f"{population}_discarded_count"]
+    retention_positive = np.concatenate(
+        all_retention_values
+    )
+    retention_positive = retention_positive[
+        retention_positive > 0.0
+    ]
 
-        for index, (
-            position,
-            kept_pct,
-            kept_n,
-            discarded_n,
-        ) in enumerate(
-            zip(
-                positions,
-                kept_percent,
-                kept_count,
-                discarded_count,
-                strict=True,
-            )
-        ):
-            # Keep labels below, except the final pointlike label.
-            if population == "pointlike" and index == len(positions) - 1:
-                label_x_offset = 9
-                label_y_offset = 9
-                label_alignment = "left"
-                vertical_alignment = "bottom"
-            else:
-                label_x_offset = x_offset
-                label_y_offset = -10
-                label_alignment = alignment
-                vertical_alignment = "top"
-
-            ax_catalog.annotate(
-                (
-                    f"K {compact_count(kept_n)}\n"
-                    f"D {compact_count(discarded_n)}"
-                ),
-                xy=(position, kept_pct),
-                xytext=(label_x_offset, label_y_offset),
-                textcoords="offset points",
-                ha=label_alignment,
-                va=vertical_alignment,
-                fontsize=7.5,
-                color=color,
-                linespacing=1.15,
-                annotation_clip=False,
-                bbox={
-                    "facecolor": "white",
-                    "edgecolor": "none",
-                    "alpha": 0.78,
-                    "pad": 0.5,
-                },
-            )
+    if retention_positive.size == 0:
+        raise ValueError(
+            "No positive catalog-retention values were found."
+        )
 
     f_labels = [
         rf"$10^{{{int(np.rint(np.log10(value)))}}}$"
         for value in f_values
     ]
 
-    positive_retention = np.concatenate(
-        [pointlike_kept, extended_kept]
-    )
-    positive_retention = positive_retention[
-        positive_retention > 0.0
-    ]
-
     ax_catalog.set_yscale("log")
     ax_catalog.set_ylim(
-        0.3 * np.min(positive_retention),
+        0.3 * np.min(retention_positive),
         250.0,
     )
     ax_catalog.yaxis.set_major_formatter(
         FuncFormatter(percent_tick)
     )
-
-    ax_catalog.set_xticks(group_x)
-    ax_catalog.set_xticklabels(f_labels)
-    ax_catalog.set_xlim(x_left, x_right)
-    ax_catalog.set_xlabel(
+    ax_integrated.set_xticks(x)
+    ax_integrated.set_xticklabels(f_labels)
+    ax_integrated.set_xlabel(
         r"$f$  ($J_{\rm cut}=f\,J_{\rm pixel,ref}$)"
     )
     ax_catalog.set_ylabel("Mean retained fraction")
     ax_catalog.set_title(
-        "Catalog retention by subhalo type"
+        "Catalogue retention by subhalo type"
     )
     ax_catalog.grid(True, which="both", alpha=0.25)
     ax_catalog.legend(
-        loc="upper right",
-        fontsize=9,
+        loc="lower left",
+        ncol=2,
+        fontsize=15.5,
         frameon=True,
     )
 
-    fig.align_ylabels((ax_impact, ax_catalog))
+    for axis in (ax_impact, ax_integrated, ax_catalog):
+        axis.set_xlim(x_left, x_right)
+        axis.set_xticks(x)
+        axis.xaxis.set_minor_locator(NullLocator())
+
+    fig.align_ylabels(
+        (ax_impact, ax_catalog, ax_integrated)
+    )
+
+    nside_values = sorted(
+        diagonal["nside"].astype(int).unique()
+    )
+    if len(nside_values) != 1:
+        raise ValueError(
+            "The combined CSV contains multiple NSIDE values."
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    stem = f"multi_repop_cut_diagnostic_nside2048_{scenario}"
+    stem = (
+        "multi_repop_cut_diagnostic_"
+        f"nside{nside_values[0]}_combined"
+    )
 
     for output_format in formats:
         output_path = output_dir / f"{stem}.{output_format}"
@@ -453,15 +520,12 @@ def main() -> None:
     validate_columns(table)
     diagonal = prepare_diagonal(table)
 
-    scenarios = sorted(diagonal["scenario"].astype(str).unique())
-    for scenario in scenarios:
-        plot_scenario(
-            diagonal=diagonal,
-            scenario=scenario,
-            output_dir=args.output_dir,
-            formats=formats,
-            dpi=args.dpi,
-        )
+    plot_combined(
+        diagonal=diagonal,
+        output_dir=args.output_dir,
+        formats=formats,
+        dpi=args.dpi,
+    )
 
 
 if __name__ == "__main__":
