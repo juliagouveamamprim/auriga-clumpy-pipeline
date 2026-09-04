@@ -37,7 +37,6 @@ DEFAULT_LOGS_DIR = (
 )
 
 VALID_SCENARIOS = {"fragile", "resilient"}
-VALID_ENVELOPE_MODES = {"theta-s"}
 
 BASE_AGGREGATE_METRICS = [
     "n_valid_total",
@@ -52,7 +51,6 @@ BASE_AGGREGATE_METRICS = [
     "n_total_kept",
     "total_reduction_factor",
     "fraction_sum_discarded_to_full",
-    "ratio_max_discarded_to_final",
 ]
 
 
@@ -94,30 +92,6 @@ def parse_scenarios(text):
         raise ValueError("At least one scenario must be provided.")
 
     return scenarios
-
-
-def parse_envelope_modes(text):
-    normalized = text.strip().lower()
-
-    if normalized in {"", "none"}:
-        return []
-
-    modes = list(
-        dict.fromkeys(
-            value.strip()
-            for value in normalized.split(",")
-            if value.strip()
-        )
-    )
-
-    invalid = sorted(set(modes) - VALID_ENVELOPE_MODES)
-
-    if invalid:
-        raise ValueError(
-            "Invalid envelope mode(s): " + ", ".join(invalid)
-        )
-
-    return modes
 
 
 def parse_args():
@@ -182,11 +156,6 @@ def parse_args():
             "Deprecated. The extended proxy now uses the CLUMPY "
             "aperture hp.max_pixrad(NSIDE), derived automatically."
         ),
-    )
-
-    parser.add_argument(
-        "--extended-envelope-modes",
-        default="theta-s",
     )
 
     parser.add_argument(
@@ -404,8 +373,6 @@ def build_scan_command(
         args.pointlike_f_values,
         "--extended-f-values",
         args.extended_f_values,
-        "--extended-envelope-modes",
-        args.extended_envelope_modes,
         "--output-csv",
         str(output_csv),
     ]
@@ -679,9 +646,7 @@ def main():
     extended_f_values = parse_float_values(
         args.extended_f_values
     )
-    envelope_modes = parse_envelope_modes(
-        args.extended_envelope_modes
-    )
+    envelope_modes = ["theta-s"]
 
     repop_ids = range(
         args.repop_start,

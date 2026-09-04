@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Catalogue-wise central-pixel scan for pointlike and extended cuts."""
+"""Catalogue-wise conservative cut scan for pointlike and extended halos."""
 
 import argparse
 import csv
@@ -29,7 +29,6 @@ from scripts.prepare_subhalo_components import (  # noqa: E402
 
 
 DEFAULT_F_VALUES = "1e-5,1e-4,1e-3,1e-2"
-VALID_EXTENDED_ENVELOPE_MODES = {"theta-s"}
 
 
 def parse_f_values(text):
@@ -44,39 +43,13 @@ def parse_f_values(text):
     return values
 
 
-def parse_envelope_modes(text):
-    normalized = text.strip().lower()
-
-    if normalized in {"", "none"}:
-        return []
-
-    modes = list(
-        dict.fromkeys(
-            value.strip()
-            for value in normalized.split(",")
-            if value.strip()
-        )
-    )
-
-    invalid = sorted(
-        set(modes) - VALID_EXTENDED_ENVELOPE_MODES
-    )
-
-    if invalid:
-        raise ValueError(
-            "Invalid extended envelope mode(s): "
-            + ", ".join(invalid)
-        )
-
-    return modes
-
-
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Evaluate pointlike and extended J-factor cuts using a combined "
-            "NSIDE HEALPix proxy map. Pointlike halos contribute Js to their "
-            "pixel; extended halos contribute Jtheta to their central pixel."
+            "Evaluate pointlike and extended J-factor cuts using a "
+            "conservative NSIDE HEALPix proxy map. Pointlike halos contribute "
+            "Js to their pixel; each discarded extended halo contributes its "
+            "central-pixel proxy throughout its theta_s envelope."
         )
     )
 
@@ -115,14 +88,6 @@ def parse_args():
         help=(
             "Deprecated. The extended proxy now uses the CLUMPY "
             "aperture hp.max_pixrad(NSIDE), derived automatically."
-        ),
-    )
-
-    parser.add_argument(
-        "--extended-envelope-modes",
-        default="none",
-        help=(
-            "Conservative envelope mode: 'theta-s' or 'none'."
         ),
     )
 
@@ -245,9 +210,7 @@ def main():
 
     pointlike_f_values = parse_f_values(args.pointlike_f_values)
     extended_f_values = parse_f_values(args.extended_f_values)
-    extended_envelope_modes = parse_envelope_modes(
-        args.extended_envelope_modes
-    )
+    extended_envelope_modes = ["theta-s"]
 
     input_h5 = (
         args.input_h5.resolve()
@@ -673,17 +636,8 @@ def main():
                 out=temporary_map,
             )
 
-            pixel_max_discarded = int(np.argmax(temporary_map))
-            max_discarded_total = float(
-                temporary_map[pixel_max_discarded]
-            )
             discarded_sum = float(
                 temporary_map.sum(dtype=np.float64)
-            )
-
-            discarded_lon, discarded_lat = pixel_coordinates(
-                args.nside,
-                pixel_max_discarded,
             )
 
             np.subtract(
@@ -698,12 +652,6 @@ def main():
             final_lon, final_lat = pixel_coordinates(
                 args.nside,
                 pixel_max_final,
-            )
-
-            ratio_max_discarded_to_final = (
-                max_discarded_total / max_final
-                if max_final > 0.0
-                else float("inf")
             )
 
             envelope_results = {}
@@ -829,20 +777,10 @@ def main():
                 "max_discarded_pointlike_pixel": float(
                     pointlike_discarded.max()
                 ),
-                "max_discarded_extended_central_pixel": float(
-                    extended_discarded.max()
-                ),
-                "max_discarded_combined_pixel": max_discarded_total,
-                "pixel_max_discarded_combined": pixel_max_discarded,
-                "lon_max_discarded_combined_deg": discarded_lon,
-                "lat_max_discarded_combined_deg": discarded_lat,
                 "max_final_combined_pixel": max_final,
                 "pixel_max_final_combined": pixel_max_final,
                 "lon_max_final_combined_deg": final_lon,
                 "lat_max_final_combined_deg": final_lat,
-                "ratio_max_discarded_to_final": (
-                    ratio_max_discarded_to_final
-                ),
             }
 
             row.update(envelope_results)
@@ -869,8 +807,7 @@ def main():
                 f"f_pl={pointlike_f:.1e} "
                 f"f_ext={extended_f:.1e} | "
                 f"N_pl={n_pointlike_kept:,} "
-                f"N_ext={n_extended_kept:,} | "
-                f"central={ratio_max_discarded_to_final:.6e}"
+                f"N_ext={n_extended_kept:,}"
                 f"{envelope_summary}"
             )
 
