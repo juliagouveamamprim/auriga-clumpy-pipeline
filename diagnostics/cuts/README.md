@@ -40,8 +40,15 @@ stress test: `theta_s` is a characteristic angular scale, not a physical
 outer boundary. The resulting map is not a physical rendered map and
 must not be used for integrated or cumulative J-factor quantities.
 
-The output also records the numbers of pointlike and extended halos kept
-after each cut.
+Separately from the proxy maps, the output records the discarded
+catalogue-integrated fraction
+
+    sum(Js_discarded) / sum(Js_full)
+
+using the original `Js` values for both pointlike and extended halos.
+Neither the extended central-pixel proxy nor its `theta-s` envelope
+enters this integrated quantity. The output also records the numbers of
+pointlike and extended halos kept after each cut.
 
 ## Scope
 

@@ -50,7 +50,7 @@ BASE_AGGREGATE_METRICS = [
     "extended_reduction_factor",
     "n_total_kept",
     "total_reduction_factor",
-    "fraction_sum_discarded_to_full",
+    "fraction_discarded_js_to_full",
 ]
 
 
@@ -294,6 +294,25 @@ def validate_existing_csv(
     if not rows:
         raise ValueError(f"Empty result CSV: {path}")
 
+    required_integrated_js_columns = {
+        "pointlike_full_js_sum",
+        "extended_full_js_sum",
+        "full_js_sum",
+        "discarded_pointlike_js_sum",
+        "discarded_extended_js_sum",
+        "discarded_combined_js_sum",
+        "fraction_discarded_js_to_full",
+    }
+    missing_columns = (
+        required_integrated_js_columns - set(rows[0])
+    )
+
+    if missing_columns:
+        raise ValueError(
+            "Existing CSV lacks current integrated-J fields: "
+            f"{path} -> {sorted(missing_columns)}"
+        )
+
     expected_modes = (
         ",".join(envelope_modes)
         if envelope_modes
@@ -482,6 +501,9 @@ def aggregate_rows(rows):
         if metric not in metrics:
             metrics.append(metric)
 
+    worst_case_metrics = set(ratio_metrics)
+    worst_case_metrics.add("fraction_discarded_js_to_full")
+
     summary_rows = []
 
     for key, group_rows in sorted(grouped.items()):
@@ -553,7 +575,7 @@ def aggregate_rows(rows):
                 np.max(values)
             )
 
-            if metric in ratio_metrics:
+            if metric in worst_case_metrics:
                 maximum = max(
                     values_and_repops,
                     key=lambda item: item[0],
@@ -599,6 +621,20 @@ def print_summary(summary_rows):
                 f"max={100.0 * float(row[metric + '_max']):.4f}% "
                 f"(repop "
                 f"{int(row[metric + '_max_repop_id']):04d})"
+            )
+
+        js_metric = "fraction_discarded_js_to_full"
+        js_mean_key = f"{js_metric}_mean"
+
+        if js_mean_key in row:
+            print(
+                "  discarded integrated Js: "
+                f"mean={100.0 * float(row[js_mean_key]):.4f}% "
+                f"std={100.0 * float(row[js_metric + '_std']):.4f}% "
+                f"min={100.0 * float(row[js_metric + '_min']):.4f}% "
+                f"max={100.0 * float(row[js_metric + '_max']):.4f}% "
+                f"(repop "
+                f"{int(row[js_metric + '_max_repop_id']):04d})"
             )
 
         print(

@@ -25,7 +25,7 @@ spec.loader.exec_module(multi)
 ALPHA_INT_DEG = float(np.rad2deg(multi.hp.max_pixrad(2048)))
 
 
-def make_row(repop_id, theta_s, n_pl, n_ext):
+def make_row(repop_id, theta_s, js_fraction, n_pl, n_ext):
     return {
         "scenario": "resilient",
         "repop_id": str(repop_id),
@@ -37,6 +37,7 @@ def make_row(repop_id, theta_s, n_pl, n_ext):
         "n_valid_total": "1000",
         "n_pointlike_kept": str(n_pl),
         "n_extended_kept": str(n_ext),
+        "fraction_discarded_js_to_full": str(js_fraction),
         "ratio_max_discarded_theta_s_envelope_to_final": str(
             theta_s
         ),
@@ -64,12 +65,14 @@ def test_aggregate_rows_computes_dispersion_and_worst_repop():
         make_row(
             repop_id=0,
             theta_s=0.006,
+            js_fraction=0.18,
             n_pl=100,
             n_ext=50,
         ),
         make_row(
             repop_id=1,
             theta_s=0.008,
+            js_fraction=0.22,
             n_pl=120,
             n_ext=40,
         ),
@@ -92,6 +95,11 @@ def test_aggregate_rows_computes_dispersion_and_worst_repop():
     assert np.isclose(result[f"{theta_key}_max"], 0.008)
     assert result[f"{theta_key}_max_repop_id"] == 1
 
+    js_key = "fraction_discarded_js_to_full"
+    assert np.isclose(result[f"{js_key}_mean"], 0.20)
+    assert np.isclose(result[f"{js_key}_max"], 0.22)
+    assert result[f"{js_key}_max_repop_id"] == 1
+
     assert np.isclose(result["n_total_kept_mean"], 155.0)
 
 
@@ -107,6 +115,13 @@ def test_validate_existing_csv(tmp_path):
             "pointlike_f": "1e-3",
             "extended_f": "1e-3",
             "theta_aperture_deg": str(ALPHA_INT_DEG),
+            "pointlike_full_js_sum": "3.0",
+            "extended_full_js_sum": "7.0",
+            "full_js_sum": "10.0",
+            "discarded_pointlike_js_sum": "1.0",
+            "discarded_extended_js_sum": "1.0",
+            "discarded_combined_js_sum": "2.0",
+            "fraction_discarded_js_to_full": "0.2",
         }
     ]
 

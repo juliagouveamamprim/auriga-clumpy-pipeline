@@ -434,11 +434,14 @@ def main():
             for f_value in extended_f_values
         }
 
-        pointlike_discarded_sums = {
+        pointlike_full_js_sum = 0.0
+        extended_full_js_sum = 0.0
+
+        pointlike_discarded_js_sums = {
             f_value: 0.0
             for f_value in pointlike_f_values
         }
-        extended_discarded_sums = {
+        extended_discarded_js_sums = {
             f_value: 0.0
             for f_value in extended_f_values
         }
@@ -481,6 +484,9 @@ def main():
 
             if np.any(mask_pointlike):
                 pointlike_js = js[mask_pointlike]
+                pointlike_full_js_sum += float(
+                    pointlike_js.sum(dtype=np.float64)
+                )
 
                 pointlike_lon, pointlike_lat = xyz_to_lb_deg(
                     x_e[mask_pointlike],
@@ -517,12 +523,15 @@ def main():
                     pointlike_discarded_counts[f_value] += int(
                         np.count_nonzero(discarded)
                     )
-                    pointlike_discarded_sums[f_value] += float(
+                    pointlike_discarded_js_sums[f_value] += float(
                         pointlike_js[discarded].sum(dtype=np.float64)
                     )
 
             if np.any(mask_extended):
                 extended_js = js[mask_extended]
+                extended_full_js_sum += float(
+                    extended_js.sum(dtype=np.float64)
+                )
 
                 extended_pixel_proxy = (
                     clumpy_central_pixel_proxy_from_js(
@@ -578,8 +587,8 @@ def main():
                     extended_discarded_counts[f_value] += int(
                         np.count_nonzero(discarded)
                     )
-                    extended_discarded_sums[f_value] += float(
-                        extended_pixel_proxy[discarded].sum(dtype=np.float64)
+                    extended_discarded_js_sums[f_value] += float(
+                        extended_js[discarded].sum(dtype=np.float64)
                     )
 
             print(
@@ -591,11 +600,8 @@ def main():
 
     full_combined = pointlike_full + extended_full
 
-    full_sum = float(full_combined.sum(dtype=np.float64))
+    full_js_sum = pointlike_full_js_sum + extended_full_js_sum
     full_max = float(full_combined.max())
-
-    pointlike_full_sum = float(pointlike_full.sum(dtype=np.float64))
-    extended_full_sum = float(extended_full.sum(dtype=np.float64))
 
     del pointlike_full
     del extended_full
@@ -634,10 +640,6 @@ def main():
                 pointlike_discarded,
                 extended_discarded,
                 out=temporary_map,
-            )
-
-            discarded_sum = float(
-                temporary_map.sum(dtype=np.float64)
             )
 
             np.subtract(
@@ -714,9 +716,19 @@ def main():
                     }
                 )
 
-            fraction_sum_discarded_to_full = (
-                discarded_sum / full_sum
-                if full_sum > 0.0
+            discarded_pointlike_js_sum = (
+                pointlike_discarded_js_sums[pointlike_f]
+            )
+            discarded_extended_js_sum = (
+                extended_discarded_js_sums[extended_f]
+            )
+            discarded_combined_js_sum = (
+                discarded_pointlike_js_sum
+                + discarded_extended_js_sum
+            )
+            fraction_discarded_js_to_full = (
+                discarded_combined_js_sum / full_js_sum
+                if full_js_sum > 0.0
                 else float("nan")
             )
 
@@ -760,19 +772,19 @@ def main():
                     n_extended_total,
                     n_extended_kept,
                 ),
-                "pointlike_full_sum": pointlike_full_sum,
-                "extended_central_full_sum": extended_full_sum,
-                "full_combined_sum": full_sum,
+                "pointlike_full_js_sum": pointlike_full_js_sum,
+                "extended_full_js_sum": extended_full_js_sum,
+                "full_js_sum": full_js_sum,
                 "full_combined_max": full_max,
-                "discarded_pointlike_sum": (
-                    pointlike_discarded_sums[pointlike_f]
+                "discarded_pointlike_js_sum": (
+                    discarded_pointlike_js_sum
                 ),
-                "discarded_extended_central_sum": (
-                    extended_discarded_sums[extended_f]
+                "discarded_extended_js_sum": (
+                    discarded_extended_js_sum
                 ),
-                "discarded_combined_sum": discarded_sum,
-                "fraction_sum_discarded_to_full": (
-                    fraction_sum_discarded_to_full
+                "discarded_combined_js_sum": discarded_combined_js_sum,
+                "fraction_discarded_js_to_full": (
+                    fraction_discarded_js_to_full
                 ),
                 "max_discarded_pointlike_pixel": float(
                     pointlike_discarded.max()
