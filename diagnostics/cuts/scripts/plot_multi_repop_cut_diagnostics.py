@@ -356,14 +356,14 @@ def plot_combined(
         color="0.25",
         linewidth=1.4,
         linestyle="--",
-        label=r"1\% threshold",
+        label=r"1\% reference",
     )
     ax_impact.axhline(
         10.0,
         color="0.45",
         linewidth=1.2,
         linestyle="-.",
-        label=r"10\% reference level",
+        label=r"10\% reference",
     )
     ax_impact.set_yscale("log")
     ax_impact.set_ylim(
