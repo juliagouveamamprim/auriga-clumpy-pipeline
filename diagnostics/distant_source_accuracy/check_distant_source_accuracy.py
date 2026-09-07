@@ -100,13 +100,57 @@ def write_header_if_needed(path: str | Path, fields: list[str]) -> None:
             csv.DictWriter(handle, fieldnames=fields).writeheader()
 
 
-def already_processed(summary_path: str | Path) -> set[str]:
+def catalogue_key(path: str | Path) -> tuple[str, str]:
+    repop = infer_repop(path)
+    scenario = infer_scenario(path)
+
+    if not repop or not scenario:
+        raise ValueError(
+            f"Could not infer repopulation and scenario from: {path}"
+        )
+
+    return repop, scenario
+
+
+def already_processed(summary_path: str | Path) -> set[tuple[str, str]]:
     path = Path(summary_path)
     if not path.exists() or path.stat().st_size == 0:
         return set()
 
-    with path.open() as handle:
-        return {row["input_file"] for row in csv.DictReader(handle)}
+    with path.open(newline="") as handle:
+        return {
+            (row["repop"], row["scenario"])
+            for row in csv.DictReader(handle)
+        }
+
+
+def remove_catalogue_rows(
+    path: str | Path,
+    key: tuple[str, str],
+) -> None:
+    path = Path(path)
+    if not path.exists() or path.stat().st_size == 0:
+        return
+
+    with path.open(newline="") as handle:
+        reader = csv.DictReader(handle)
+        fieldnames = reader.fieldnames
+        rows = [
+            row
+            for row in reader
+            if (row.get("repop"), row.get("scenario")) != key
+        ]
+
+    if fieldnames is None:
+        return
+
+    temporary = path.with_name(path.name + ".tmp")
+    with temporary.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    os.replace(temporary, path)
 
 
 def process_catalogue(path: str | Path, args) -> tuple[dict, list[dict]]:
@@ -229,6 +273,11 @@ def main() -> None:
     parser.add_argument("--progress-every", type=int, default=10_000_000)
     parser.add_argument("--eta-1pct", type=float, default=DEFAULT_ETA_1PCT)
     parser.add_argument("--eta-5pct", type=float, default=DEFAULT_ETA_5PCT)
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Reprocess and replace catalogues already present in the outputs.",
+    )
     args = parser.parse_args()
 
     files = list(args.files)
@@ -266,20 +315,29 @@ def main() -> None:
     print(f"Already processed: {len(done)}")
 
     for index, filename in enumerate(files, start=1):
-        if filename in done:
+        key = catalogue_key(filename)
+
+        if key in done and not args.force:
             print(f"[{index:04d}/{len(files):04d}] SKIP {filename}", flush=True)
             continue
 
         print(f"[{index:04d}/{len(files):04d}] RUN {filename}", flush=True)
         summary, outliers = process_catalogue(filename, args)
 
-        with open(args.summary, "a", newline="") as handle:
-            csv.DictWriter(handle, fieldnames=summary_fields).writerow(summary)
+        # Remove any previous or partially written result for this catalogue.
+        # The summary row is written last and acts as the completion marker.
+        remove_catalogue_rows(args.summary, key)
+        remove_catalogue_rows(args.outliers, key)
 
         if outliers:
             with open(args.outliers, "a", newline="") as handle:
                 writer = csv.DictWriter(handle, fieldnames=outlier_fields)
                 writer.writerows(outliers)
+
+        with open(args.summary, "a", newline="") as handle:
+            csv.DictWriter(handle, fieldnames=summary_fields).writerow(summary)
+
+        done.add(key)
 
         print(
             f"[{index:04d}/{len(files):04d}] DONE "

@@ -16,3 +16,8 @@ The recommended output organization is cumulative:
 
 Generated CSV outputs and run logs should be written under `outputs/` and are not
 tracked by git.
+
+The script resumes using the `(repop, scenario)` pair as the catalogue
+identifier. Existing entries are skipped by default. Use `--force` to
+reprocess requested catalogues and replace their previous summary and outlier
+rows.
