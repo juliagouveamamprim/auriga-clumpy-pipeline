@@ -16,12 +16,20 @@ plt.rcParams.update(
     {
         "text.usetex": True,
         "font.family": "serif",
-        "axes.labelsize": 18,
+        "axes.labelsize": 13,
         "axes.titlesize": 18,
-        "xtick.labelsize": 16,
-        "ytick.labelsize": 16,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
         "legend.fontsize": 15.5,
     }
+)
+
+
+REFERENCE_RATIO_COLUMN = (
+    "ratio_max_discarded_theta_s_envelope_to_j_pixel_ref"
+)
+DISCARDED_PEAK_COLUMN = (
+    "max_discarded_combined_theta_s_envelope_pixel"
 )
 
 
@@ -31,7 +39,7 @@ REQUIRED_COLUMNS = {
     "nside",
     "pointlike_f",
     "extended_f",
-    "ratio_max_discarded_theta_s_envelope_to_final",
+    "j_pixel_ref",
     "fraction_discarded_js_to_full",
     "n_pointlike_total",
     "n_pointlike_kept",
@@ -77,11 +85,51 @@ def parse_args() -> argparse.Namespace:
 
 def validate_columns(table: pd.DataFrame) -> None:
     missing = sorted(REQUIRED_COLUMNS.difference(table.columns))
+
+    if (
+        REFERENCE_RATIO_COLUMN not in table.columns
+        and DISCARDED_PEAK_COLUMN not in table.columns
+    ):
+        missing.append(
+            f"{REFERENCE_RATIO_COLUMN} or {DISCARDED_PEAK_COLUMN}"
+        )
+
     if missing:
         raise ValueError(
             "The combined CSV is missing required columns: "
             + ", ".join(missing)
         )
+
+
+def add_reference_ratio_fallback(
+    table: pd.DataFrame,
+) -> pd.DataFrame:
+    j_pixel_ref = pd.to_numeric(
+        table["j_pixel_ref"],
+        errors="coerce",
+    )
+    invalid_reference = (
+        ~np.isfinite(j_pixel_ref.to_numpy(dtype=float))
+        | (j_pixel_ref.to_numpy(dtype=float) <= 0.0)
+    )
+
+    if np.any(invalid_reference):
+        invalid_rows = table.index[invalid_reference].tolist()
+        raise ValueError(
+            "j_pixel_ref must be finite and positive; invalid row "
+            f"indices: {invalid_rows}"
+        )
+
+    if REFERENCE_RATIO_COLUMN in table.columns:
+        return table
+
+    discarded_peak = pd.to_numeric(
+        table[DISCARDED_PEAK_COLUMN],
+        errors="coerce",
+    )
+    result = table.copy()
+    result[REFERENCE_RATIO_COLUMN] = discarded_peak / j_pixel_ref
+    return result
 
 
 def compact_count(value: float) -> str:
@@ -118,9 +166,7 @@ def prepare_diagonal(table: pd.DataFrame) -> pd.DataFrame:
     diagonal["cut_f"] = diagonal["pointlike_f"].astype(float)
     diagonal["impact_percent"] = (
         100.0
-        * diagonal[
-            "ratio_max_discarded_theta_s_envelope_to_final"
-        ].astype(float)
+        * diagonal[REFERENCE_RATIO_COLUMN].astype(float)
     )
     diagonal["integrated_discarded_percent"] = (
         100.0
@@ -375,12 +421,12 @@ def plot_combined(
     )
     ax_impact.set_ylabel(
         "Conservative discarded-map peak\n"
-        "/ final-map peak"
+        r"/ $J_{\rm pixel,ref}$"
     )
     ax_impact.set_title(
         "Conservative map-level impact of discarded subhalos"
     )
-    ax_impact.grid(True, which="both", alpha=0.25)
+    ax_impact.grid(False, which="both")
     ax_impact.legend(
         loc="lower right",
         ncol=2,
@@ -415,7 +461,7 @@ def plot_combined(
     ax_integrated.set_title(
         "Catalogue-integrated J-factor removed by the cut"
     )
-    ax_integrated.grid(True, which="both", alpha=0.25)
+    ax_integrated.grid(False, which="both")
     ax_integrated.legend(
         loc="lower right",
         fontsize=15.5,
@@ -456,7 +502,7 @@ def plot_combined(
     ax_catalog.set_title(
         "Catalogue retention by subhalo type"
     )
-    ax_catalog.grid(True, which="both", alpha=0.25)
+    ax_catalog.grid(False, which="both")
     ax_catalog.legend(
         loc="lower left",
         ncol=2,
@@ -468,6 +514,9 @@ def plot_combined(
         axis.set_xlim(x_left, x_right)
         axis.set_xticks(x)
         axis.xaxis.set_minor_locator(NullLocator())
+        axis.tick_params(axis="both", which="both", labelsize=11)
+        axis.xaxis.get_offset_text().set_fontsize(11)
+        axis.yaxis.get_offset_text().set_fontsize(11)
 
     fig.align_ylabels(
         (ax_impact, ax_catalog, ax_integrated)
@@ -518,6 +567,7 @@ def main() -> None:
 
     table = pd.read_csv(args.combined_csv)
     validate_columns(table)
+    table = add_reference_ratio_fallback(table)
     diagonal = prepare_diagonal(table)
 
     plot_combined(

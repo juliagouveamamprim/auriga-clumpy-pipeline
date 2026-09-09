@@ -294,7 +294,8 @@ def validate_existing_csv(
     if not rows:
         raise ValueError(f"Empty result CSV: {path}")
 
-    required_integrated_js_columns = {
+    required_diagnostic_columns = {
+        "j_pixel_ref",
         "pointlike_full_js_sum",
         "extended_full_js_sum",
         "full_js_sum",
@@ -303,15 +304,53 @@ def validate_existing_csv(
         "discarded_combined_js_sum",
         "fraction_discarded_js_to_full",
     }
+    fallback_columns = {}
+
+    for mode in envelope_modes:
+        mode_key = mode.replace("-", "_")
+        ratio_column = (
+            "ratio_max_discarded_"
+            f"{mode_key}_envelope_to_j_pixel_ref"
+        )
+
+        if ratio_column not in rows[0]:
+            peak_column = (
+                "max_discarded_combined_"
+                f"{mode_key}_envelope_pixel"
+            )
+            required_diagnostic_columns.add(peak_column)
+            fallback_columns[ratio_column] = peak_column
+
     missing_columns = (
-        required_integrated_js_columns - set(rows[0])
+        required_diagnostic_columns - set(rows[0])
     )
 
     if missing_columns:
         raise ValueError(
-            "Existing CSV lacks current integrated-J fields: "
+            "Existing CSV lacks current diagnostic fields: "
             f"{path} -> {sorted(missing_columns)}"
         )
+
+    for row_number, row in enumerate(rows, start=2):
+        try:
+            j_pixel_ref = float(row["j_pixel_ref"])
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "Existing CSV has invalid j_pixel_ref: "
+                f"{path}, row {row_number}"
+            ) from error
+
+        if not np.isfinite(j_pixel_ref) or j_pixel_ref <= 0.0:
+            raise ValueError(
+                "Existing CSV has invalid j_pixel_ref: "
+                f"{path}, row {row_number} -> "
+                f"{row['j_pixel_ref']!r}"
+            )
+
+        for ratio_column, peak_column in fallback_columns.items():
+            row[ratio_column] = (
+                float(row[peak_column]) / j_pixel_ref
+            )
 
     expected_modes = (
         ",".join(envelope_modes)
@@ -491,7 +530,7 @@ def aggregate_rows(rows):
             for row in rows
             for key in row
             if key.startswith("ratio_max_discarded")
-            and key.endswith("_to_final")
+            and key.endswith("_to_j_pixel_ref")
         }
     )
 

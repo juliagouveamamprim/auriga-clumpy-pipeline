@@ -681,11 +681,7 @@ def main():
                     envelope_pixel,
                 )
 
-                envelope_ratio = (
-                    envelope_max / max_final
-                    if max_final > 0.0
-                    else float("inf")
-                )
+                envelope_ratio = envelope_max / j_pixel_ref
 
                 envelope_results.update(
                     {
@@ -711,7 +707,7 @@ def main():
                         ): envelope_lat,
                         (
                             "ratio_max_discarded_"
-                            f"{mode_key}_envelope_to_final"
+                            f"{mode_key}_envelope_to_j_pixel_ref"
                         ): envelope_ratio,
                     }
                 )
@@ -804,7 +800,7 @@ def main():
                 mode_key = mode.replace("-", "_")
                 ratio_key = (
                     "ratio_max_discarded_"
-                    f"{mode_key}_envelope_to_final"
+                    f"{mode_key}_envelope_to_j_pixel_ref"
                 )
                 envelope_summary_parts.append(
                     f" | {mode}="

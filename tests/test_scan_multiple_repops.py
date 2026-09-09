@@ -38,7 +38,7 @@ def make_row(repop_id, theta_s, js_fraction, n_pl, n_ext):
         "n_pointlike_kept": str(n_pl),
         "n_extended_kept": str(n_ext),
         "fraction_discarded_js_to_full": str(js_fraction),
-        "ratio_max_discarded_theta_s_envelope_to_final": str(
+        "ratio_max_discarded_theta_s_envelope_to_j_pixel_ref": str(
             theta_s
         ),
     }
@@ -90,7 +90,7 @@ def test_aggregate_rows_computes_dispersion_and_worst_repop():
 
     assert result["n_repops"] == 2
     theta_key = (
-        "ratio_max_discarded_theta_s_envelope_to_final"
+        "ratio_max_discarded_theta_s_envelope_to_j_pixel_ref"
     )
     assert np.isclose(result[f"{theta_key}_max"], 0.008)
     assert result[f"{theta_key}_max_repop_id"] == 1
@@ -115,6 +115,7 @@ def test_validate_existing_csv(tmp_path):
             "pointlike_f": "1e-3",
             "extended_f": "1e-3",
             "theta_aperture_deg": str(ALPHA_INT_DEG),
+            "j_pixel_ref": "10.0",
             "pointlike_full_js_sum": "3.0",
             "extended_full_js_sum": "7.0",
             "full_js_sum": "10.0",
@@ -122,6 +123,7 @@ def test_validate_existing_csv(tmp_path):
             "discarded_extended_js_sum": "1.0",
             "discarded_combined_js_sum": "2.0",
             "fraction_discarded_js_to_full": "0.2",
+            "max_discarded_combined_theta_s_envelope_pixel": "0.06",
         }
     ]
 
@@ -144,12 +146,62 @@ def test_validate_existing_csv(tmp_path):
     )
 
     assert len(validated) == 1
+    assert np.isclose(
+        float(
+            validated[0][
+                "ratio_max_discarded_theta_s_envelope_to_j_pixel_ref"
+            ]
+        ),
+        0.006,
+    )
 
     with pytest.raises(ValueError):
         multi.validate_existing_csv(
             path=path,
             repop_id=0,
             scenario="resilient",
+            nside=2048,
+            pointlike_f_values=[1e-3],
+            extended_f_values=[1e-3],
+            envelope_modes=["theta-s"],
+        )
+
+
+@pytest.mark.parametrize("j_pixel_ref", ["0.0", "nan"])
+def test_validate_existing_csv_rejects_invalid_reference(
+    tmp_path,
+    j_pixel_ref,
+):
+    path = tmp_path / "individual.csv"
+    row = {
+        "repop_id": 0,
+        "scenario": "fragile",
+        "nside": 2048,
+        "extended_envelope_modes": "theta-s",
+        "pointlike_f": "1e-3",
+        "extended_f": "1e-3",
+        "theta_aperture_deg": str(ALPHA_INT_DEG),
+        "j_pixel_ref": j_pixel_ref,
+        "pointlike_full_js_sum": "3.0",
+        "extended_full_js_sum": "7.0",
+        "full_js_sum": "10.0",
+        "discarded_pointlike_js_sum": "1.0",
+        "discarded_extended_js_sum": "1.0",
+        "discarded_combined_js_sum": "2.0",
+        "fraction_discarded_js_to_full": "0.2",
+        "max_discarded_combined_theta_s_envelope_pixel": "0.06",
+    }
+
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(row))
+        writer.writeheader()
+        writer.writerow(row)
+
+    with pytest.raises(ValueError, match="invalid j_pixel_ref"):
+        multi.validate_existing_csv(
+            path=path,
+            repop_id=0,
+            scenario="fragile",
             nside=2048,
             pointlike_f_values=[1e-3],
             extended_f_values=[1e-3],

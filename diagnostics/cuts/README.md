@@ -33,7 +33,18 @@ Contributions from overlapping halos are summed pixel by pixel.
 
 The only pixel-level validation metric is
 
-    max(conservative discarded proxy map) / max(retained proxy map)
+    max(conservative discarded proxy map) / J_pixel_ref
+
+It is stored as
+`ratio_max_discarded_theta_s_envelope_to_j_pixel_ref`. The denominator
+is computed from the complete catalogue before applying any cuts, as
+the maximum between the brightest pointlike `Js` and the brightest
+extended central-pixel proxy.
+
+When reading legacy CSVs without this ratio column, the aggregation and
+plotting scripts derive it in memory from `j_pixel_ref` and
+`max_discarded_combined_theta_s_envelope_pixel`. The input CSVs are not
+modified, and non-finite or non-positive reference values are rejected.
 
 The `theta-s` envelope is always applied. It is an intentionally extreme
 stress test: `theta_s` is a characteristic angular scale, not a physical
@@ -173,10 +184,10 @@ are shown.
 The upper panel presents the conservative combined-map impact from the
 `theta-s` envelope:
 
-    max(conservative discarded proxy map) / max(retained proxy map)
+    max(conservative discarded proxy map) / J_pixel_ref
 
 Individual repopulations are shown together with the mean and the
-16th–84th percentile interval.
+16th–84th percentile interval. The dashed 1% reference line is retained.
 
 The lower panel shows the mean retained catalogue fraction separately
 for pointlike and extended subhalos. The annotations report the mean
