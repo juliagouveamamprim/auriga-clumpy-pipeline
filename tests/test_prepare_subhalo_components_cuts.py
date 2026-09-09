@@ -78,7 +78,6 @@ def test_prepare_subhalo_components_with_cuts():
             chunk_size=2,
             extended_cut_f=1e-3,
             pointlike_cut_f=1e-4,
-            theta_aperture_deg=1.0,
         )
 
         rows = [

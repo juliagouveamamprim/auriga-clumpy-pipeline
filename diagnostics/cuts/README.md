@@ -114,6 +114,35 @@ Example:
 
 The generated NPZ files and figures should not be committed.
 
+## Discarded-Js distribution
+
+The script `scripts/scan_discarded_js_distribution.py` reapplies the
+pointlike and extended catalogue cuts and saves one compact histogram of
+`Js / Js,max` per catalogue and population (`all`, `pointlike`, and
+`extended`). `Js,max` is looked up by the exact `(scenario, repop_id)` key
+in the CSV produced by `scan_catalogue_jsmax.py`; catalogues are never
+combined before their relative `Js` values are calculated. The selected
+row's `n_saved` must also match the HDF5 dataset row count. The default
+range and resolution match the cumulative diagnostic (`-16 <= log10(j_rel)
+<= 0`, 320 bins), and underflow, overflow, invalid values, totals, maxima,
+and source provenance are stored explicitly. The NPZ is checkpointed
+atomically after every catalogue and is resumed automatically.
+
+    python -u diagnostics/cuts/scripts/scan_discarded_js_distribution.py \
+        --input-root /path/to/Auriga_outputs_hdf5_v2 \
+        --jsmax-csv outputs/diagnostics/repop_jsmax_diagnostic_all_repopulations.csv \
+        --output-npz outputs/diagnostics/cuts/discarded_js_distribution.npz
+
+The companion `scripts/plot_discarded_js_distribution.py` normalizes each
+catalogue histogram before aggregating the mean and 16th--84th percentile
+band across repopulations. Select `--population all`, `pointlike`, or
+`extended`; PNG and PDF are produced by default.
+
+    python diagnostics/cuts/scripts/plot_discarded_js_distribution.py \
+        --input-npz outputs/diagnostics/cuts/discarded_js_distribution.npz \
+        --output-dir diagnostics/cuts/plots \
+        --population all
+
 ## Multiple-repopulation scan
 
 The script `scripts/scan_multiple_repops.py` runs the individual cut
