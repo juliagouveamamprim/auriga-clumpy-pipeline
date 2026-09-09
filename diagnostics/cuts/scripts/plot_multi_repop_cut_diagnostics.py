@@ -16,10 +16,10 @@ plt.rcParams.update(
     {
         "text.usetex": True,
         "font.family": "serif",
-        "axes.labelsize": 13,
+        "axes.labelsize": 17,
         "axes.titlesize": 18,
-        "xtick.labelsize": 11,
-        "ytick.labelsize": 11,
+        "xtick.labelsize": 15,
+        "ytick.labelsize": 15,
         "legend.fontsize": 15.5,
     }
 )
@@ -421,7 +421,7 @@ def plot_combined(
     )
     ax_impact.set_ylabel(
         "Conservative discarded-map peak\n"
-        r"/ $J_{\rm pixel,ref}$"
+        r"/ $J_{\rm{pixel\,ref}}$"
     )
     ax_impact.set_title(
         "Conservative map-level impact of discarded subhalos"
@@ -496,7 +496,7 @@ def plot_combined(
     ax_integrated.set_xticks(x)
     ax_integrated.set_xticklabels(f_labels)
     ax_integrated.set_xlabel(
-        r"$f$  ($J_{\rm cut}=f\,J_{\rm pixel,ref}$)"
+        r"$f$  ($J_{\rm cut}=f\,J_{\rm{pixel\,ref}}$)"
     )
     ax_catalog.set_ylabel("Mean retained fraction")
     ax_catalog.set_title(
@@ -514,9 +514,9 @@ def plot_combined(
         axis.set_xlim(x_left, x_right)
         axis.set_xticks(x)
         axis.xaxis.set_minor_locator(NullLocator())
-        axis.tick_params(axis="both", which="both", labelsize=11)
-        axis.xaxis.get_offset_text().set_fontsize(11)
-        axis.yaxis.get_offset_text().set_fontsize(11)
+        axis.tick_params(axis="both", which="both", labelsize=15)
+        axis.xaxis.get_offset_text().set_fontsize(15)
+        axis.yaxis.get_offset_text().set_fontsize(15)
 
     fig.align_ylabels(
         (ax_impact, ax_catalog, ax_integrated)
