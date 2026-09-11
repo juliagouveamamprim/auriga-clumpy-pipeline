@@ -17,8 +17,8 @@ Environment variables:
   LAUNCH_DELAY_SECONDS  Delay between launches (default: 5)
   SKIP_COMPLETED        Skip non-empty final total FITS files (default: 1)
   NSIDE                 HEALPix NSIDE inherited by one-case runs (default: 2048)
-  EXTENDED_CUT_F        Extended cut factor inherited by one-case runs (default: none)
-  POINTLIKE_CUT_F       Pointlike cut factor inherited by one-case runs (default: none)
+  EXTENDED_CUT_F        Extended cut factor inherited by one-case runs (default: 1e-3)
+  POINTLIKE_CUT_F       Pointlike cut factor inherited by one-case runs (default: 1e-3)
   CLUMPY_EXECUTABLE     CLUMPY executable or wrapper inherited by one-case runs
   PYTHON_EXECUTABLE     Python executable inherited by one-case runs
 
@@ -44,8 +44,8 @@ LAUNCH_DELAY_SECONDS="${LAUNCH_DELAY_SECONDS:-5}"
 SKIP_COMPLETED="${SKIP_COMPLETED:-1}"
 DEFAULT_NSIDE=2048
 NSIDE="${NSIDE:-${DEFAULT_NSIDE}}"
-EXTENDED_CUT_F="${EXTENDED_CUT_F:-}"
-POINTLIKE_CUT_F="${POINTLIKE_CUT_F:-}"
+EXTENDED_CUT_F="${EXTENDED_CUT_F:-1e-3}"
+POINTLIKE_CUT_F="${POINTLIKE_CUT_F:-1e-3}"
 
 export NSIDE EXTENDED_CUT_F POINTLIKE_CUT_F
 

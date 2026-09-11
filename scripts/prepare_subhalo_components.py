@@ -23,6 +23,10 @@ and writes:
     outputs/clumpy/<scenario>/pointlike/
         repop_0001_pointlike_nside<NSIDE>.fits
 
+    outputs/clumpy/<scenario>/cases/repop_0001_nside<NSIDE>/
+        clumpy_params.template.txt
+        preparation_manifest.json
+
 Expected HDF5 structure
 -----------------------
 
@@ -53,7 +57,12 @@ Operational choices:
 """
 
 import argparse
+import hashlib
+import json
 import math
+import os
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import h5py
@@ -69,6 +78,10 @@ from astropy.io import fits
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 BASE_H5_DIR = REPOSITORY_ROOT / "outputs"
 BASE_RUN_DIR = REPOSITORY_ROOT / "outputs" / "clumpy"
+TEMPLATE_DIR = REPOSITORY_ROOT / "configs" / "clumpy_templates"
+TEMPLATE_NAME = (
+    "clumpy_params_g6_auriga_nfw_{scenario}_renorm_vmin0p1.template.txt"
+)
 
 # Internal HDF5 iteration index.
 # In our one-directory-per-repop convention, each HDF5 contains iteration_0.
@@ -84,6 +97,24 @@ HALO_TYPE = "DSPH"
 
 # HEALPix map resolution used to define the point-like cut.
 NSIDE = 2048
+
+# Adopted production catalogue cuts. Disabling them requires --no-cuts.
+DEFAULT_EXTENDED_CUT_F = 1.0e-3
+DEFAULT_POINTLIKE_CUT_F = 1.0e-3
+
+PREPARATION_MANIFEST_SCHEMA_VERSION = 1
+
+SCIENTIFIC_GMW_RHOSOL = {
+    "resilient": 3.9447023823e-1,
+    "fragile": 3.9570067534e-1,
+}
+
+KNOWN_HDF5_GROUP_ATTRIBUTES = (
+    "n_generated",
+    "n_removed_engulfing",
+    "n_removed_roche",
+    "n_saved",
+)
 
 # Number of decimal places used when rounding theta_pix upward.
 # Example: if theta_pix = 0.02863 deg and ROUND_UP_DECIMALS = 2,
@@ -101,7 +132,7 @@ CHUNK_SIZE = 500_000
 # CLI
 # ============================================================
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description=(
             "Convert one Auriga HDF5 full repopulation into a CLUMPY "
@@ -135,11 +166,21 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--cut-f",
+        type=float,
+        default=None,
+        help=(
+            "Set the same cut fraction for extended and pointlike halos. "
+            "Cannot be combined with the component-specific cut options."
+        ),
+    )
+
+    parser.add_argument(
         "--extended-cut-f",
         type=float,
         default=None,
         help=(
-            "Optional cut fraction for extended halos. If provided, "
+            "Cut fraction for extended halos (production default: 1e-3). "
             "extended halos are kept only when their corrected-CLUMPY "
             "central-pixel proxy is >= extended_cut_f * J_pixel_ref."
         ),
@@ -150,9 +191,18 @@ def parse_args():
         type=float,
         default=None,
         help=(
-            "Optional cut fraction for pointlike halos. If provided, "
+            "Cut fraction for pointlike halos (production default: 1e-3). "
             "pointlike halos are kept only when Js >= pointlike_cut_f "
             "* J_pixel_ref."
+        ),
+    )
+
+    parser.add_argument(
+        "--no-cuts",
+        action="store_true",
+        help=(
+            "Explicitly disable both extended and pointlike catalogue cuts. "
+            "Cannot be combined with either cut-f option."
         ),
     )
 
@@ -166,14 +216,53 @@ def parse_args():
         ),
     )
 
-    return parser.parse_args()
+    args = parser.parse_args(argv)
+
+    if args.no_cuts:
+        if (
+            args.cut_f is not None
+            or args.extended_cut_f is not None
+            or args.pointlike_cut_f is not None
+        ):
+            parser.error(
+                "--no-cuts cannot be combined with --cut-f, "
+                "--extended-cut-f, or --pointlike-cut-f"
+            )
+        args.extended_cut_f = None
+        args.pointlike_cut_f = None
+    else:
+        if args.cut_f is not None:
+            if (
+                args.extended_cut_f is not None
+                or args.pointlike_cut_f is not None
+            ):
+                parser.error(
+                    "--cut-f cannot be combined with --extended-cut-f or "
+                    "--pointlike-cut-f"
+                )
+            args.extended_cut_f = args.cut_f
+            args.pointlike_cut_f = args.cut_f
+        else:
+            if args.extended_cut_f is None:
+                args.extended_cut_f = DEFAULT_EXTENDED_CUT_F
+            if args.pointlike_cut_f is None:
+                args.pointlike_cut_f = DEFAULT_POINTLIKE_CUT_F
+
+        for option_name, value in (
+            ("--extended-cut-f", args.extended_cut_f),
+            ("--pointlike-cut-f", args.pointlike_cut_f),
+        ):
+            if not math.isfinite(value) or value < 0.0:
+                parser.error(f"{option_name} must be finite and non-negative")
+
+    return args
 
 
 # ============================================================
 # Path helpers
 # ============================================================
 
-def get_h5_dir(repop_id):
+def get_h5_dir(repop_id, base_h5_dir=BASE_H5_DIR):
     """
     Return HDF5 directory for a given global repop ID.
 
@@ -181,17 +270,23 @@ def get_h5_dir(repop_id):
 
         outputs/repop_XXXX/
     """
-    return BASE_H5_DIR / f"repop_{repop_id:04d}"
+    return Path(base_h5_dir) / f"repop_{repop_id:04d}"
 
 
-def get_input_h5(repop_id, scenario):
+def get_input_h5(repop_id, scenario, base_h5_dir=BASE_H5_DIR):
     """
     Return input HDF5 file for one repop/scenario.
     """
-    return get_h5_dir(repop_id) / f"fullrepop_hydro_{scenario}.h5"
+    return get_h5_dir(repop_id, base_h5_dir) / f"fullrepop_hydro_{scenario}.h5"
 
 
-def get_output_list(repop_id, scenario, top_n, nside=NSIDE):
+def get_output_list(
+    repop_id,
+    scenario,
+    top_n,
+    nside=NSIDE,
+    base_run_dir=BASE_RUN_DIR,
+):
     """
     Return output CLUMPY raw list path.
 
@@ -206,7 +301,7 @@ def get_output_list(repop_id, scenario, top_n, nside=NSIDE):
     filename = base + ".txt"
 
     return (
-        BASE_RUN_DIR
+        Path(base_run_dir)
         / scenario
         / "lists"
         / "raw"
@@ -214,14 +309,273 @@ def get_output_list(repop_id, scenario, top_n, nside=NSIDE):
     )
 
 
-def get_output_pointlike_fits(repop_id, scenario, nside):
+def get_output_pointlike_fits(
+    repop_id,
+    scenario,
+    nside,
+    base_run_dir=BASE_RUN_DIR,
+):
     """Return output path for the pointlike-only HEALPix FITS map."""
     return (
-        BASE_RUN_DIR
+        Path(base_run_dir)
         / scenario
         / "pointlike"
         / f"repop_{repop_id:04d}_pointlike_nside{nside}.fits"
     )
+
+
+def get_case_dir(repop_id, scenario, nside, base_run_dir=BASE_RUN_DIR):
+    """Return the preparation metadata directory for one exact case."""
+    return (
+        Path(base_run_dir)
+        / scenario
+        / "cases"
+        / f"repop_{repop_id:04d}_nside{nside}"
+    )
+
+
+def get_template_path(scenario, template_dir=TEMPLATE_DIR):
+    """Return the immutable scientific CLUMPY template for a scenario."""
+    return Path(template_dir) / TEMPLATE_NAME.format(scenario=scenario)
+
+
+def sha256_file(path, chunk_size=1024 * 1024):
+    """Return the SHA-256 checksum of a file without loading it in memory."""
+    digest = hashlib.sha256()
+
+    with open(path, "rb") as stream:
+        while True:
+            chunk = stream.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+
+    return digest.hexdigest()
+
+
+def normalize_known_hdf5_group_attributes(attributes):
+    """Return validated integer catalogue counters used by preparation."""
+    normalized = {}
+
+    for name in KNOWN_HDF5_GROUP_ATTRIBUTES:
+        if name not in attributes:
+            continue
+
+        value = attributes[name]
+        if isinstance(value, np.ndarray):
+            if value.ndim != 0:
+                raise ValueError(
+                    f"HDF5 attribute {name!r} must be a scalar integer."
+                )
+            value = value.item()
+        elif isinstance(value, np.generic):
+            value = value.item()
+
+        if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+            raise ValueError(
+                f"HDF5 attribute {name!r} must be a scalar integer."
+            )
+        if value < 0:
+            raise ValueError(
+                f"HDF5 attribute {name!r} must be non-negative."
+            )
+
+        normalized[name] = int(value)
+
+    return normalized
+
+
+def read_gmw_rhosol_from_bytes(template_bytes, source_description="template"):
+    """Read the unique finite gMW_RHOSOL value from template bytes."""
+    matches = []
+
+    try:
+        template_text = template_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"CLUMPY template is not valid UTF-8: {source_description}"
+        ) from exc
+
+    for line in template_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split()
+        if parts[0] == "gMW_RHOSOL":
+            if len(parts) < 3:
+                raise ValueError(
+                    "Could not parse gMW_RHOSOL in template: "
+                    f"{source_description}"
+                )
+            if parts[1] != "[GeV/cm3]":
+                raise ValueError(
+                    "Expected gMW_RHOSOL units [GeV/cm3] in template: "
+                    f"{source_description}"
+                )
+            try:
+                value = float(parts[2])
+            except ValueError as exc:
+                raise ValueError(
+                    "Could not parse gMW_RHOSOL in template: "
+                    f"{source_description}"
+                ) from exc
+            if not math.isfinite(value):
+                raise ValueError(
+                    "gMW_RHOSOL must be finite in template: "
+                    f"{source_description}"
+                )
+            matches.append(value)
+
+    if len(matches) != 1:
+        raise ValueError(
+            "Expected exactly one gMW_RHOSOL entry in template "
+            f"{source_description}, found {len(matches)}."
+        )
+
+    return matches[0]
+
+
+def read_gmw_rhosol(template_path):
+    """Read gMW_RHOSOL from one immutable read of a CLUMPY template."""
+    template_path = Path(template_path)
+    return read_gmw_rhosol_from_bytes(
+        template_path.read_bytes(),
+        source_description=str(template_path),
+    )
+
+
+def validate_template_scenario(scenario, gmw_rhosol, source_description):
+    """Reject a template whose fixed MW normalization belongs to another case."""
+    expected = SCIENTIFIC_GMW_RHOSOL[scenario]
+    if not math.isclose(gmw_rhosol, expected, rel_tol=1.0e-12, abs_tol=0.0):
+        raise ValueError(
+            f"CLUMPY template does not match scenario {scenario!r}: "
+            f"gMW_RHOSOL={gmw_rhosol:.10e}, expected {expected:.10e} in "
+            f"{source_description}."
+        )
+
+
+def write_bytes_without_overwrite(data, destination):
+    """Write bytes while refusing to replace any existing destination."""
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(destination, "xb") as destination_stream:
+        destination_stream.write(data)
+        destination_stream.flush()
+        os.fsync(destination_stream.fileno())
+
+
+def validate_finite_scientific_values(value, path="scientific_data"):
+    """Reject non-finite numbers recursively before manifest publication."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            validate_finite_scientific_values(item, f"{path}.{key}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            validate_finite_scientific_values(item, f"{path}[{index}]")
+        return
+    if isinstance(value, (float, np.floating)) and not math.isfinite(float(value)):
+        raise ValueError(f"Non-finite scientific value at {path}: {value!r}")
+
+
+def write_json_atomic_no_overwrite(path, payload):
+    """Publish a complete JSON file atomically without overwriting a target."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        temporary_path = Path(temporary_name)
+
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(
+                payload,
+                stream,
+                indent=2,
+                sort_keys=True,
+                allow_nan=False,
+            )
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+
+        # link() fails if the destination appeared after the preflight check.
+        os.link(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+
+def raise_for_existing_targets(targets):
+    """Refuse preparation if any case product already exists."""
+    existing = [Path(path) for path in targets if os.path.lexists(path)]
+
+    if existing:
+        formatted = "\n".join(f"  - {path}" for path in existing)
+        raise FileExistsError(
+            "Preparation refused because target product(s) already exist:\n"
+            f"{formatted}\n"
+            "No files were changed. Choose another case or inspect the "
+            "existing products. --force is not implemented yet."
+        )
+
+
+class PreparationCaseLock:
+    """Exclusive per-case lock removed on both success and failure."""
+
+    def __init__(self, path, repop_id, scenario, nside):
+        self.path = Path(path)
+        self.repop_id = repop_id
+        self.scenario = scenario
+        self.nside = nside
+        self.acquired = False
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            descriptor = os.open(
+                self.path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o644,
+            )
+        except FileExistsError as exc:
+            raise FileExistsError(
+                "Preparation refused because this exact case is already "
+                f"locked: {self.path}"
+            ) from exc
+
+        self.acquired = True
+        try:
+            payload = (
+                f"pid={os.getpid()}\n"
+                f"repop_id={self.repop_id}\n"
+                f"scenario={self.scenario}\n"
+                f"nside={self.nside}\n"
+            ).encode("utf-8")
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except BaseException:
+            if self.acquired:
+                self.path.unlink(missing_ok=True)
+                self.acquired = False
+            raise
+
+        return self.path
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.acquired:
+            self.path.unlink(missing_ok=True)
+            self.acquired = False
+        return False
 
 
 # ============================================================
@@ -566,13 +920,20 @@ def write_pointlike_fits(
     primary = fits.PrimaryHDU()
     primary.header["CONTENT"] = "Auriga pointlike subhalo J-factor map"
 
-    fits.HDUList(
+    hdul = fits.HDUList(
         [
             primary,
             hdu_j,
             hdu_per_sr,
         ]
-    ).writeto(output_path, overwrite=True)
+    )
+    descriptor = os.open(
+        output_path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o644,
+    )
+    with os.fdopen(descriptor, "wb") as output_stream:
+        hdul.writeto(output_stream)
 
 
 
@@ -844,8 +1205,8 @@ def prepare_subhalo_components(
     nside,
     round_up_decimals,
     chunk_size,
-    extended_cut_f=None,
-    pointlike_cut_f=None,
+    extended_cut_f=DEFAULT_EXTENDED_CUT_F,
+    pointlike_cut_f=DEFAULT_POINTLIKE_CUT_F,
     theta_aperture_deg=None,
 ):
     """
@@ -867,8 +1228,7 @@ def prepare_subhalo_components(
     output_list = Path(output_list)
     output_pointlike_fits = Path(output_pointlike_fits)
 
-    output_list.parent.mkdir(parents=True, exist_ok=True)
-    output_pointlike_fits.parent.mkdir(parents=True, exist_ok=True)
+    raise_for_existing_targets([output_list, output_pointlike_fits])
 
     if not input_h5.exists():
         raise FileNotFoundError(f"Input HDF5 file not found: {input_h5}")
@@ -881,11 +1241,17 @@ def prepare_subhalo_components(
         or pointlike_cut_f is not None
     )
 
-    if extended_cut_f is not None and extended_cut_f < 0.0:
-        raise ValueError("extended_cut_f must be non-negative.")
+    for cut_name, cut_value in (
+        ("extended_cut_f", extended_cut_f),
+        ("pointlike_cut_f", pointlike_cut_f),
+    ):
+        if cut_value is None:
+            continue
+        if not math.isfinite(cut_value) or cut_value < 0.0:
+            raise ValueError(f"{cut_name} must be finite and non-negative.")
 
-    if pointlike_cut_f is not None and pointlike_cut_f < 0.0:
-        raise ValueError("pointlike_cut_f must be non-negative.")
+    output_list.parent.mkdir(parents=True, exist_ok=True)
+    output_pointlike_fits.parent.mkdir(parents=True, exist_ok=True)
 
     alpha_int_rad = float(hp.max_pixrad(nside))
     alpha_int_deg = float(np.rad2deg(alpha_int_rad))
@@ -909,15 +1275,20 @@ def prepare_subhalo_components(
     total_seen = 0
     total_valid = 0
     total_invalid = 0
+    valid_js_subtotals = []
 
     total_extended = 0
     total_extended_cut_kept = 0
     total_extended_written = 0
+    extended_js_subtotals = []
+    extended_kept_js_subtotals = []
+    extended_discarded_js_subtotals = []
 
     total_pointlike = 0
     total_pointlike_kept = 0
-    total_pointlike_js = 0.0
-    total_pointlike_kept_js = 0.0
+    pointlike_js_subtotals = []
+    pointlike_kept_js_subtotals = []
+    pointlike_discarded_js_subtotals = []
 
     with h5py.File(input_h5, "r") as h5:
         if group_name not in h5:
@@ -934,6 +1305,8 @@ def prepare_subhalo_components(
         data = group["data"]
         halo_name = group["halo_name"]
 
+        group_attributes = normalize_known_hdf5_group_attributes(group.attrs)
+
         if data.ndim != 2:
             raise ValueError(
                 f"Expected '{group_name}/data' to be two-dimensional, "
@@ -949,6 +1322,7 @@ def prepare_subhalo_components(
             name.decode("utf-8") if isinstance(name, bytes) else str(name)
             for name in data.attrs["column_names"]
         ]
+        data_attributes = {"column_names": column_names}
 
         if len(column_names) != data.shape[1]:
             raise ValueError(
@@ -1051,6 +1425,7 @@ def prepare_subhalo_components(
                 "extended_j_cut": extended_j_cut,
                 "pointlike_j_cut": pointlike_j_cut,
             }
+            validate_finite_scientific_values(cut_metadata, "cuts")
 
             print(f"brightest pointlike proxy: {ref_info['brightest_pointlike']:.8e}")
             print(f"brightest extended proxy:  {ref_info['brightest_extended']:.8e}")
@@ -1063,7 +1438,7 @@ def prepare_subhalo_components(
         print("=" * 80)
         print()
 
-        with open(output_list, "w", encoding="utf-8") as f:
+        with open(output_list, "x", encoding="utf-8") as f:
             write_header(
                 f=f,
                 input_h5=input_h5,
@@ -1136,6 +1511,9 @@ def prepare_subhalo_components(
                 if pointlike_j_cut is not None:
                     mask_pointlike_kept = mask_pointlike & (js >= pointlike_j_cut)
 
+                mask_extended_discarded = mask_extended & ~mask_extended_kept
+                mask_pointlike_discarded = mask_pointlike & ~mask_pointlike_kept
+
                 n_valid_chunk = int(np.count_nonzero(valid))
                 n_extended_chunk = int(np.count_nonzero(mask_extended))
                 n_extended_kept_chunk = int(np.count_nonzero(mask_extended_kept))
@@ -1149,9 +1527,29 @@ def prepare_subhalo_components(
                 total_pointlike += n_pointlike_chunk
                 total_pointlike_kept += n_pointlike_kept_chunk
 
+                if n_valid_chunk:
+                    valid_js_subtotals.append(
+                        float(js[valid].sum(dtype=np.float64))
+                    )
+
+                if n_extended_chunk:
+                    extended_js_subtotals.append(
+                        float(js[mask_extended].sum(dtype=np.float64))
+                    )
+
+                if n_extended_kept_chunk:
+                    extended_kept_js_subtotals.append(
+                        float(js[mask_extended_kept].sum(dtype=np.float64))
+                    )
+
+                if np.any(mask_extended_discarded):
+                    extended_discarded_js_subtotals.append(
+                        float(js[mask_extended_discarded].sum(dtype=np.float64))
+                    )
+
                 if n_pointlike_chunk:
-                    total_pointlike_js += js[mask_pointlike].sum(
-                        dtype=np.float64
+                    pointlike_js_subtotals.append(
+                        float(js[mask_pointlike].sum(dtype=np.float64))
                     )
 
                 if n_pointlike_kept_chunk:
@@ -1177,8 +1575,13 @@ def prepare_subhalo_components(
                         minlength=pointlike_map.size,
                     )
 
-                    total_pointlike_kept_js += js_pointlike.sum(
-                        dtype=np.float64
+                    pointlike_kept_js_subtotals.append(
+                        float(js_pointlike.sum(dtype=np.float64))
+                    )
+
+                if np.any(mask_pointlike_discarded):
+                    pointlike_discarded_js_subtotals.append(
+                        float(js[mask_pointlike_discarded].sum(dtype=np.float64))
                     )
 
                 mask_extended_to_write = mask_extended_kept
@@ -1224,7 +1627,36 @@ def prepare_subhalo_components(
                     flush=True,
                 )
 
-    map_sum = pointlike_map.sum(dtype=np.float64)
+    try:
+        total_valid_js = math.fsum(valid_js_subtotals)
+        total_extended_js = math.fsum(extended_js_subtotals)
+        total_extended_kept_js = math.fsum(extended_kept_js_subtotals)
+        total_extended_discarded_js = math.fsum(
+            extended_discarded_js_subtotals
+        )
+        total_pointlike_js = math.fsum(pointlike_js_subtotals)
+        total_pointlike_kept_js = math.fsum(pointlike_kept_js_subtotals)
+        total_pointlike_discarded_js = math.fsum(
+            pointlike_discarded_js_subtotals
+        )
+    except OverflowError as exc:
+        raise ValueError("Scientific J-factor statistics overflowed.") from exc
+
+    map_sum = float(pointlike_map.sum(dtype=np.float64))
+
+    validate_finite_scientific_values(
+        {
+            "valid_js_sum": total_valid_js,
+            "extended_before_cuts_js_sum": total_extended_js,
+            "extended_after_cuts_js_sum": total_extended_kept_js,
+            "extended_discarded_js_sum": total_extended_discarded_js,
+            "pointlike_before_cuts_js_sum": total_pointlike_js,
+            "pointlike_after_cuts_js_sum": total_pointlike_kept_js,
+            "pointlike_discarded_js_sum": total_pointlike_discarded_js,
+            "pointlike_map_js_sum": map_sum,
+        },
+        "catalogue_statistics",
+    )
 
     if not np.isclose(
         map_sum,
@@ -1260,9 +1692,12 @@ def prepare_subhalo_components(
     print(f"Total halos seen: {total_seen:,}")
     print(f"Valid halos: {total_valid:,}")
     print(f"Invalid halos excluded: {total_invalid:,}")
+    print(f"Valid catalog sum(Js): {total_valid_js:.16e}")
     print(f"Extended halos: {total_extended:,}")
     print(f"Extended halos kept by cut: {total_extended_cut_kept:,}")
     print(f"Extended halos written: {total_extended_written:,}")
+    print(f"Extended catalog sum(Js), all:  {total_extended_js:.16e}")
+    print(f"Extended catalog sum(Js), kept: {total_extended_kept_js:.16e}")
     print(f"Pointlike halos: {total_pointlike:,}")
     print(f"Pointlike halos kept by cut: {total_pointlike_kept:,}")
     print(f"Pointlike catalog sum(Js), all:  {total_pointlike_js:.16e}")
@@ -1270,6 +1705,283 @@ def prepare_subhalo_components(
     print(f"Pointlike map sum:              {map_sum:.16e}")
     print(f"TOP_N for extended list: {top_n}")
     print("=" * 80)
+
+    cuts = {
+        "enabled": cuts_enabled,
+        "extended_cut_f": extended_cut_f,
+        "pointlike_cut_f": pointlike_cut_f,
+        "j_pixel_ref": None,
+        "extended_j_cut": None,
+        "pointlike_j_cut": None,
+        "brightest_pointlike": None,
+        "brightest_extended": None,
+    }
+
+    if cut_metadata is not None:
+        cuts.update({
+            "j_pixel_ref": cut_metadata["j_pixel_ref"],
+            "extended_j_cut": cut_metadata["extended_j_cut"],
+            "pointlike_j_cut": cut_metadata["pointlike_j_cut"],
+            "brightest_pointlike": cut_metadata["brightest_pointlike"],
+            "brightest_extended": cut_metadata["brightest_extended"],
+        })
+
+    return {
+        "hdf5": {
+            "group": group_name,
+            "rows": n_total,
+            "group_attributes": group_attributes,
+            "data_attributes": data_attributes,
+        },
+        "geometry": {
+            "nside": nside,
+            "ordering": "NESTED",
+            "theta_pixel_deg": theta_pix_deg,
+            "theta_min_deg": theta_min_deg,
+            "clumpy_aperture_deg": theta_aperture_deg,
+        },
+        "cuts": cuts,
+        "catalogue": {
+            "rows_seen": total_seen,
+            "valid_count": total_valid,
+            "invalid_count": total_invalid,
+            # Invalid rows need not have a finite, physical Js to sum.
+            "valid_js_sum": total_valid_js,
+            "extended": {
+                "before_cuts_count": total_extended,
+                "after_cuts_count": total_extended_cut_kept,
+                "discarded_count": (
+                    total_extended - total_extended_cut_kept
+                ),
+                "written_count": total_extended_written,
+                "before_cuts_js_sum": total_extended_js,
+                "after_cuts_js_sum": total_extended_kept_js,
+                "discarded_js_sum": total_extended_discarded_js,
+            },
+            "pointlike": {
+                "before_cuts_count": total_pointlike,
+                "after_cuts_count": total_pointlike_kept,
+                "discarded_count": total_pointlike - total_pointlike_kept,
+                "before_cuts_js_sum": total_pointlike_js,
+                "after_cuts_js_sum": total_pointlike_kept_js,
+                "discarded_js_sum": total_pointlike_discarded_js,
+                "map_js_sum": map_sum,
+            },
+        },
+    }
+
+
+def prepare_case(
+    repop_id,
+    scenario,
+    nside=NSIDE,
+    extended_cut_f=DEFAULT_EXTENDED_CUT_F,
+    pointlike_cut_f=DEFAULT_POINTLIKE_CUT_F,
+    base_h5_dir=BASE_H5_DIR,
+    base_run_dir=BASE_RUN_DIR,
+    template_path=None,
+    repository_root=REPOSITORY_ROOT,
+    iteration=ITERATION,
+    halo_type=HALO_TYPE,
+    round_up_decimals=ROUND_UP_DECIMALS,
+    chunk_size=CHUNK_SIZE,
+    theta_aperture_deg=None,
+):
+    """Prepare one case and publish its immutable preparation manifest."""
+    if repop_id < 0:
+        raise ValueError("repop_id must be a non-negative integer.")
+    if scenario not in ("resilient", "fragile"):
+        raise ValueError("scenario must be 'resilient' or 'fragile'.")
+    if nside <= 0 or (nside & (nside - 1)) != 0:
+        raise ValueError("nside must be a positive power of two.")
+    for cut_name, cut_value in (
+        ("extended_cut_f", extended_cut_f),
+        ("pointlike_cut_f", pointlike_cut_f),
+    ):
+        if cut_value is None:
+            continue
+        if not math.isfinite(cut_value) or cut_value < 0.0:
+            raise ValueError(f"{cut_name} must be finite and non-negative.")
+
+    # Kept in the signature for compatibility; manifest paths no longer use it.
+    del repository_root
+    base_run_dir = Path(base_run_dir).resolve()
+    input_h5 = get_input_h5(repop_id, scenario, base_h5_dir)
+    output_list = get_output_list(
+        repop_id,
+        scenario,
+        TOP_N,
+        nside=nside,
+        base_run_dir=base_run_dir,
+    )
+    output_pointlike_fits = get_output_pointlike_fits(
+        repop_id,
+        scenario,
+        nside,
+        base_run_dir=base_run_dir,
+    )
+    case_dir = get_case_dir(
+        repop_id,
+        scenario,
+        nside,
+        base_run_dir=base_run_dir,
+    )
+    template_snapshot = case_dir / "clumpy_params.template.txt"
+    manifest_path = case_dir / "preparation_manifest.json"
+    lock_path = case_dir / ".preparation.lock"
+
+    if template_path is None:
+        template_path = get_template_path(scenario)
+    template_path = Path(template_path)
+
+    targets = [
+        output_list,
+        output_pointlike_fits,
+        template_snapshot,
+        manifest_path,
+    ]
+    raise_for_existing_targets(targets)
+
+    if not input_h5.exists():
+        raise FileNotFoundError(f"Input HDF5 file not found: {input_h5}")
+    if not template_path.exists():
+        raise FileNotFoundError(f"CLUMPY template not found: {template_path}")
+
+    template_bytes = template_path.read_bytes()
+    gmw_rhosol = read_gmw_rhosol_from_bytes(
+        template_bytes,
+        source_description=str(template_path),
+    )
+    validate_template_scenario(scenario, gmw_rhosol, str(template_path))
+
+    with PreparationCaseLock(
+        lock_path,
+        repop_id=repop_id,
+        scenario=scenario,
+        nside=nside,
+    ):
+        # Close the preflight/lock race before producing the first artifact.
+        raise_for_existing_targets(targets)
+
+        statistics = prepare_subhalo_components(
+            input_h5=input_h5,
+            output_list=output_list,
+            output_pointlike_fits=output_pointlike_fits,
+            scenario=scenario,
+            repop_id=repop_id,
+            iteration=iteration,
+            top_n=TOP_N,
+            halo_type=halo_type,
+            nside=nside,
+            round_up_decimals=round_up_decimals,
+            chunk_size=chunk_size,
+            extended_cut_f=extended_cut_f,
+            pointlike_cut_f=pointlike_cut_f,
+            theta_aperture_deg=theta_aperture_deg,
+        )
+
+        write_bytes_without_overwrite(template_bytes, template_snapshot)
+
+        manifest_base = manifest_path.parent.resolve()
+
+        def manifest_relative(path):
+            return Path(
+                os.path.relpath(Path(path).resolve(), manifest_base)
+            ).as_posix()
+
+        scientific_configuration = {
+            "halo_type": halo_type,
+            "profile": "kZHAO",
+            "profile_parameters": [1, 3, 1],
+            "rdelta": "r_s",
+            "clumpy_rhos": "rho_s / 4",
+            "nside": nside,
+            "healpix_ordering": "NESTED",
+            "theta_pixel_deg": statistics["geometry"]["theta_pixel_deg"],
+            "theta_min_deg": statistics["geometry"]["theta_min_deg"],
+            "clumpy_aperture_deg": statistics["geometry"][
+                "clumpy_aperture_deg"
+            ],
+            "cuts": statistics["cuts"],
+            "smooth_milky_way": {
+                "gMW_RHOSOL_GeV_cm3": gmw_rhosol,
+                "normalization_mode": "fixed_by_scenario_template",
+            },
+        }
+        catalogue_statistics = {
+            "hdf5": statistics["hdf5"],
+            "preparation": statistics["catalogue"],
+        }
+        validate_finite_scientific_values(
+            scientific_configuration,
+            "scientific_configuration",
+        )
+        validate_finite_scientific_values(
+            catalogue_statistics,
+            "catalogue_statistics",
+        )
+
+        manifest = {
+            "schema_version": PREPARATION_MANIFEST_SCHEMA_VERSION,
+            "state": "complete",
+            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "identity": {
+                "repop_id": repop_id,
+                "repop_tag": f"repop_{repop_id:04d}",
+                "scenario": scenario,
+                "nside": nside,
+                "hdf5_iteration": iteration,
+            },
+            "paths": {
+                "base": ".",
+                "base_description": "directory containing this manifest",
+            },
+            "source": {
+                "hdf5": {
+                    "path": manifest_relative(input_h5),
+                    "provenance_only": True,
+                    "required_by_rendering": False,
+                },
+                "template": {
+                    "path": manifest_relative(template_path),
+                    "provenance_only": True,
+                    "required_by_rendering": False,
+                },
+            },
+            "scientific_configuration": scientific_configuration,
+            "catalogue_statistics": catalogue_statistics,
+            "artifacts": {
+                "raw_list": {
+                    "path": manifest_relative(output_list),
+                    "sha256": sha256_file(output_list),
+                    "size_bytes": output_list.stat().st_size,
+                },
+                "pointlike_fits": {
+                    "path": manifest_relative(output_pointlike_fits),
+                    "sha256": sha256_file(output_pointlike_fits),
+                    "size_bytes": output_pointlike_fits.stat().st_size,
+                },
+                "template_snapshot": {
+                    "path": manifest_relative(template_snapshot),
+                    "sha256": hashlib.sha256(template_bytes).hexdigest(),
+                    "size_bytes": template_snapshot.stat().st_size,
+                },
+            },
+        }
+
+        write_json_atomic_no_overwrite(manifest_path, manifest)
+
+    print()
+    print("=" * 80)
+    print("Preparation case completed")
+    print("=" * 80)
+    print(f"Template snapshot: {template_snapshot}")
+    print(f"Preparation manifest: {manifest_path}")
+    print(f"gMW_RHOSOL: {gmw_rhosol:.10e} GeV/cm^3")
+    print("CLUMPY was not executed.")
+    print("=" * 80)
+
+    return manifest_path, manifest
 
 def main():
     args = parse_args()
@@ -1285,31 +1997,10 @@ def main():
     if nside <= 0 or (nside & (nside - 1)) != 0:
         raise ValueError("nside must be a positive power of two.")
 
-    input_h5 = get_input_h5(repop_id, scenario)
-    output_list = get_output_list(
-        repop_id,
-        scenario,
-        TOP_N,
-        nside=nside,
-    )
-    output_pointlike_fits = get_output_pointlike_fits(
-        repop_id,
-        scenario,
-        nside,
-    )
-
-    prepare_subhalo_components(
-        input_h5=input_h5,
-        output_list=output_list,
-        output_pointlike_fits=output_pointlike_fits,
-        scenario=scenario,
+    prepare_case(
         repop_id=repop_id,
-        iteration=ITERATION,
-        top_n=TOP_N,
-        halo_type=HALO_TYPE,
+        scenario=scenario,
         nside=nside,
-        round_up_decimals=ROUND_UP_DECIMALS,
-        chunk_size=CHUNK_SIZE,
         extended_cut_f=args.extended_cut_f,
         pointlike_cut_f=args.pointlike_cut_f,
         theta_aperture_deg=args.theta_aperture_deg,
