@@ -66,8 +66,8 @@ PYTHON="${PYTHON_EXECUTABLE:-python3}"
 DEFAULT_NSIDE=2048
 NSIDE="${NSIDE:-${DEFAULT_NSIDE}}"
 
-EXTENDED_CUT_F="${EXTENDED_CUT_F:-}"
-POINTLIKE_CUT_F="${POINTLIKE_CUT_F:-}"
+EXTENDED_CUT_F="${EXTENDED_CUT_F:-1e-3}"
+POINTLIKE_CUT_F="${POINTLIKE_CUT_F:-1e-3}"
 
 if ! [[ "${NSIDE}" =~ ^[0-9]+$ ]] || (( NSIDE < 1 || (NSIDE & (NSIDE - 1)) != 0 )); then
     echo "ERROR: NSIDE must be a positive power of two."
@@ -146,13 +146,8 @@ PREPARE_ARGS=(
     "--nside" "${NSIDE}"
 )
 
-if [ -n "${EXTENDED_CUT_F}" ]; then
-    PREPARE_ARGS+=("--extended-cut-f" "${EXTENDED_CUT_F}")
-fi
-
-if [ -n "${POINTLIKE_CUT_F}" ]; then
-    PREPARE_ARGS+=("--pointlike-cut-f" "${POINTLIKE_CUT_F}")
-fi
+PREPARE_ARGS+=("--extended-cut-f" "${EXTENDED_CUT_F}")
+PREPARE_ARGS+=("--pointlike-cut-f" "${POINTLIKE_CUT_F}")
 
 "${PYTHON}" "${SCRIPTS_DIR}/prepare_subhalo_components.py" "${PREPARE_ARGS[@]}"
 

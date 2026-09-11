@@ -15,7 +15,7 @@ sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
 from prepare_subhalo_components import prepare_subhalo_components
 
 
-def main():
+def test_order_binning_conservation_and_top_n_deprecation():
     column_names = [
         "Js",
         "D_Earth",
@@ -67,6 +67,8 @@ def main():
             nside=8,
             round_up_decimals=2,
             chunk_size=2,
+            extended_cut_f=None,
+            pointlike_cut_f=None,
         )
 
         rows = [
@@ -121,12 +123,3 @@ def main():
             assert "top_n is deprecated" in str(exc)
         else:
             raise AssertionError("top_n should raise ValueError")
-
-    print(
-        "PASS: extended list, pointlike map, NESTED pixel placement, "
-        "J conservation, and top_n deprecation are correct."
-    )
-
-
-if __name__ == "__main__":
-    main()
