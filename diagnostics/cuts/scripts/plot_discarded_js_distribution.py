@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot per-catalogue distributions of discarded-subhalo relative Js."""
+"""Plot mean and percentile distributions of discarded-subhalo relative Js."""
 
 from __future__ import annotations
 
@@ -26,13 +26,15 @@ plt.rcParams.update(
 FORMAT_VERSION = 1
 POPULATIONS = ("all", "pointlike", "extended")
 SCENARIO_ORDER = ("fragile", "resilient")
+DISPLAY_X_LIMITS = (1.0e-12, 1.0e-2)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Plot the mean and 16th--84th percentile band of the "
-            "per-catalogue discarded-subhalo Js distributions."
+            "Plot the arithmetic mean and pointwise 16th--84th percentiles "
+            "of the normalized per-catalogue discarded-subhalo Js "
+            "distributions."
         )
     )
     parser.add_argument("--input-npz", type=Path, required=True)
@@ -46,6 +48,12 @@ def parse_args() -> argparse.Namespace:
         "--formats",
         default="png,pdf",
         help="Comma-separated output formats (default: png,pdf).",
+    )
+    parser.add_argument(
+        "--rebin-factor",
+        type=int,
+        default=2,
+        help="Number of adjacent histogram bins to sum (default: 2).",
     )
     parser.add_argument("--dpi", type=int, default=220)
     return parser.parse_args()
@@ -139,20 +147,52 @@ def load_distribution(path: Path) -> dict[str, np.ndarray]:
     return output
 
 
+def rebin_histograms(
+    histograms: np.ndarray,
+    log_relative_edges: np.ndarray,
+    rebin_factor: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sum adjacent histogram bins and return their new log-space edges."""
+    histograms = np.asarray(histograms)
+    edges = np.asarray(log_relative_edges, dtype=np.float64)
+
+    if histograms.ndim != 2:
+        raise ValueError("Histograms must be a two-dimensional array.")
+    if edges.ndim != 1 or histograms.shape[1] != len(edges) - 1:
+        raise ValueError("Histogram bins do not match log-relative edges.")
+    if (
+        isinstance(rebin_factor, (bool, np.bool_))
+        or not isinstance(rebin_factor, (int, np.integer))
+        or rebin_factor <= 0
+    ):
+        raise ValueError("Rebin factor must be a positive integer.")
+
+    n_bins = histograms.shape[1]
+    if n_bins % rebin_factor != 0:
+        raise ValueError(
+            f"Original bin count ({n_bins}) must be divisible by "
+            f"rebin factor ({rebin_factor})."
+        )
+
+    rebinned = histograms.reshape(
+        histograms.shape[0], n_bins // rebin_factor, rebin_factor
+    ).sum(axis=2)
+    rebinned_edges = edges[::rebin_factor]
+    return rebinned, rebinned_edges
+
+
 def aggregate_repop_distributions(
     histograms: np.ndarray,
     totals: np.ndarray,
     log_relative_edges: np.ndarray,
+    rebin_factor: int,
 ) -> dict[str, np.ndarray]:
-    """Normalize each catalogue first, then aggregate bin by bin."""
+    """Rebin, normalize each catalogue, then aggregate bin by bin."""
     histograms = np.asarray(histograms, dtype=np.float64)
     totals = np.asarray(totals, dtype=np.float64)
-    widths = np.diff(np.asarray(log_relative_edges, dtype=np.float64))
 
     if histograms.ndim != 2 or histograms.shape[0] != len(totals):
         raise ValueError("Histogram and total arrays are inconsistent.")
-    if histograms.shape[1] != len(widths):
-        raise ValueError("Histogram bins do not match log-relative edges.")
     if np.any(~np.isfinite(totals)) or np.any(totals <= 0.0):
         raise ValueError(
             "Each catalogue must have a finite, positive discarded total."
@@ -160,13 +200,27 @@ def aggregate_repop_distributions(
     if np.any(~np.isfinite(histograms)) or np.any(histograms < 0.0):
         raise ValueError("Histogram counts must be finite and non-negative.")
 
-    density = histograms / totals[:, None] / widths[None, :]
+    rebinned, rebinned_edges = rebin_histograms(
+        histograms,
+        log_relative_edges,
+        rebin_factor,
+    )
+    percentage = 100.0 * rebinned / totals[:, None]
     return {
-        "density": density,
-        "mean": np.mean(density, axis=0),
-        "lower": np.percentile(density, 16.0, axis=0),
-        "upper": np.percentile(density, 84.0, axis=0),
+        "log_relative_edges": rebinned_edges,
+        "percentage": percentage,
+        "mean": np.mean(percentage, axis=0),
+        "lower": np.percentile(percentage, 16.0, axis=0),
+        "upper": np.percentile(percentage, 84.0, axis=0),
     }
+
+
+def percentage_axis_label(log_relative_edges: np.ndarray) -> str:
+    """Return the percentage label after validating uniform log edges."""
+    widths = np.diff(np.asarray(log_relative_edges, dtype=np.float64))
+    if len(widths) == 0 or not np.allclose(widths, widths[0]):
+        raise ValueError("Rebinned log-relative bins must have uniform widths.")
+    return r"Fraction of discarded subhalos [\%]"
 
 
 def plot_distribution(
@@ -175,9 +229,9 @@ def plot_distribution(
     output_dir: Path,
     formats: tuple[str, ...],
     dpi: int,
+    rebin_factor: int,
 ) -> list[Path]:
     edges = np.asarray(data["log_relative_edges"], dtype=np.float64)
-    centers = 10.0 ** (0.5 * (edges[:-1] + edges[1:]))
     scenarios = np.asarray(data["catalogue_scenarios"], dtype=str)
     histograms = np.asarray(data[f"hist_{population}"], dtype=np.float64)
     totals = np.asarray(data[f"n_discarded_{population}"], dtype=np.float64)
@@ -192,6 +246,9 @@ def plot_distribution(
         scenario for scenario in SCENARIO_ORDER if scenario in available
     ]
     scenario_order.extend(sorted(available - set(scenario_order)))
+    legend_handles = []
+    legend_labels = []
+    rebinned_log_edges = None
 
     for scenario in scenario_order:
         selected = scenarios == scenario
@@ -199,38 +256,63 @@ def plot_distribution(
             histograms[selected],
             totals[selected],
             edges,
+            rebin_factor,
         )
         color = colors.get(scenario, "0.25")
         label = scenario.capitalize()
-        axis.fill_between(
-            centers,
-            aggregate["lower"],
+        rebinned_log_edges = aggregate["log_relative_edges"]
+        rebinned_edges = 10.0 ** rebinned_log_edges
+        band_handle = axis.stairs(
             aggregate["upper"],
+            rebinned_edges,
+            baseline=aggregate["lower"],
             color=color,
-            alpha=0.20,
+            alpha=0.18,
             linewidth=0.0,
-            label=f"{label} 16--84 percentile",
+            label=f"{label} bin-wise 16--84 percentile",
+            fill=True,
+            zorder=1,
         )
-        axis.plot(
-            centers,
+        mean_handle = axis.stairs(
             aggregate["mean"],
+            rebinned_edges,
             color=color,
             linewidth=2.2,
             label=f"{label} mean",
+            fill=False,
+            zorder=2,
+        )
+        legend_handles.extend((mean_handle, band_handle))
+        legend_labels.extend(
+            (f"{label} mean", f"{label} bin-wise 16--84 percentile")
         )
 
+    if rebinned_log_edges is None:
+        raise ValueError("No catalogue scenarios are available to plot.")
+
     axis.set_xscale("log")
-    axis.set_xlim(10.0**edges[0], 10.0**edges[-1])
+    axis.set_xlim(*DISPLAY_X_LIMITS)
     axis.set_xlabel(r"$J_s/J_{s,\max}^{\rm cat}$")
     axis.set_ylabel(
-        "Fraction of discarded subhalos\n"
-        r"per unit $\log_{10}(J_s/J_{s,\max}^{\rm cat})$"
+        percentage_axis_label(rebinned_log_edges),
+        fontsize=15,
     )
     axis.tick_params(axis="both", which="both", labelsize=15)
     axis.xaxis.get_offset_text().set_fontsize(15)
     axis.yaxis.get_offset_text().set_fontsize(15)
     axis.grid(False, which="both")
-    axis.legend(frameon=False)
+    axis.legend(
+        handles=legend_handles,
+        labels=legend_labels,
+        ncols=1,
+        loc="upper left",
+        fontsize=11,
+        labelspacing=0.3,
+        handlelength=2.0,
+        handletextpad=0.5,
+        borderaxespad=0.4,
+        frameon=False,
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = f"discarded_js_distribution_{population}"
@@ -259,6 +341,7 @@ def main() -> None:
         output_dir=args.output_dir,
         formats=formats,
         dpi=args.dpi,
+        rebin_factor=args.rebin_factor,
     )
 
 

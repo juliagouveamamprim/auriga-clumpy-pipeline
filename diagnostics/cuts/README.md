@@ -133,10 +133,28 @@ atomically after every catalogue and is resumed automatically.
         --jsmax-csv outputs/diagnostics/repop_jsmax_diagnostic_all_repopulations.csv \
         --output-npz outputs/diagnostics/cuts/discarded_js_distribution.npz
 
-The companion `scripts/plot_discarded_js_distribution.py` normalizes each
-catalogue histogram before aggregating the mean and 16th--84th percentile
-band across repopulations. Select `--population all`, `pointlike`, or
-`extended`; PNG and PDF are produced by default.
+The companion `scripts/plot_discarded_js_distribution.py` first sums pairs of
+adjacent 0.05-dex bins by default, producing 0.10-dex steps; this can be
+configured with `--rebin-factor`. It then normalizes every catalogue before
+calculating the percentage of discarded subhalos in each rebinned interval
+(`100 * n_bin / n_discarded`). The arithmetic mean and pointwise 16th--84th
+percentiles are calculated across repopulations after this normalization.
+The shaded step areas show those percentile intervals, including
+zero-percentage catalogues in every bin. Individual catalogue histograms sum
+to 100%; the pointwise percentile curves are not expected to. Select
+`--population all`, `pointlike`, or `extended`; PNG and PDF are produced by
+default.
+The displayed x range is limited to
+`1e-12 <= Js / Js,max^cat <= 1e-2`; this changes only the view and does not
+truncate the stored histograms or their normalization.
+
+Suggested figure caption: For each catalogue, the histogram is normalized by
+the total number of discarded subhalos. Solid lines show the arithmetic mean
+across the 500 repopulations of each scenario. In each bin separately, the
+shaded regions delimit the 16th--84th percentile interval of the
+discarded-subhalo fractions across the repopulations. The percentile bounds
+are therefore pointwise summaries and do not represent individual catalogue
+histograms.
 
     python diagnostics/cuts/scripts/plot_discarded_js_distribution.py \
         --input-npz outputs/diagnostics/cuts/discarded_js_distribution.npz \
