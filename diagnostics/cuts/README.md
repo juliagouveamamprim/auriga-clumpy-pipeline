@@ -141,19 +141,22 @@ calculating the percentage of discarded subhalos in each rebinned interval
 percentiles are calculated across repopulations after this normalization.
 The shaded step areas show those percentile intervals, including
 zero-percentage catalogues in every bin. Individual catalogue histograms sum
-to 100%; the pointwise percentile curves are not expected to. Select
-`--population all`, `pointlike`, or `extended`; PNG and PDF are produced by
-default.
+to 100%; the pointwise percentile curves are not expected to. By default,
+`--population combined` produces one figure with pointlike subhalos in the
+upper panel and extended subhalos in the lower panel. The compatibility and
+diagnostic modes `--population all`, `pointlike`, and `extended` remain
+available; PNG and PDF are produced by default.
 The displayed x range is limited to
 `1e-12 <= Js / Js,max^cat <= 1e-2`; this changes only the view and does not
 truncate the stored histograms or their normalization.
 
-Suggested figure caption: For each catalogue, the histogram is normalized by
-the total number of discarded subhalos. Solid lines show the arithmetic mean
-across the 500 repopulations of each scenario. In each bin separately, the
-shaded regions delimit the 16th--84th percentile interval of the
-discarded-subhalo fractions across the repopulations. The percentile bounds
-are therefore pointwise summaries and do not represent individual catalogue
+Suggested figure caption: The upper panel shows the discarded pointlike
+subhalos and the lower panel shows the discarded extended subhalos. Each
+histogram is normalized separately by the total number of discarded subhalos
+in its respective population and catalogue. Solid lines show the arithmetic
+means across the 500 repopulations of each scenario. The shaded bands are
+bin-wise 16--84 percentile intervals calculated between the repopulations;
+they are pointwise summaries and do not represent individual catalogue
 histograms.
 
     python diagnostics/cuts/scripts/plot_discarded_js_distribution.py \

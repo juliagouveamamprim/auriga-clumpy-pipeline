@@ -38,6 +38,26 @@ def test_cli_defaults_to_point_one_dex_rebinning(monkeypatch):
     )
 
     assert plot.parse_args().rebin_factor == 2
+    assert plot.parse_args().population == "combined"
+
+
+@pytest.mark.parametrize("population", ["all", "pointlike", "extended"])
+def test_cli_preserves_individual_population_modes(monkeypatch, population):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(SCRIPT_PATH),
+            "--input-npz",
+            "input.npz",
+            "--output-dir",
+            "plots",
+            "--population",
+            population,
+        ],
+    )
+
+    assert plot.parse_args().population == population
 
 
 def test_rebin_histograms_sums_adjacent_bins():
@@ -333,8 +353,8 @@ def test_plot_draws_step_means_and_edge_aligned_bands(monkeypatch, tmp_path):
         "Resilient bin-wise 16--84 percentile",
     ]
     assert legend_kwargs["ncols"] == 1
-    assert legend_kwargs["loc"] == "upper left"
-    assert legend_kwargs["fontsize"] == 11
+    assert legend_kwargs["loc"] == "upper right"
+    assert legend_kwargs["fontsize"] == 12
     assert legend_kwargs["labelspacing"] == 0.3
     assert legend_kwargs["handlelength"] == 2.0
     assert legend_kwargs["handletextpad"] == 0.5
@@ -344,4 +364,83 @@ def test_plot_draws_step_means_and_edge_aligned_bands(monkeypatch, tmp_path):
     assert saved == [
         tmp_path / "discarded_js_distribution_all.png",
         tmp_path / "discarded_js_distribution_all.pdf",
+    ]
+
+
+def test_combined_plot_has_shared_two_panel_layout_and_single_legend(
+    monkeypatch,
+    tmp_path,
+):
+    edges = np.linspace(-0.4, 0.0, 9)
+    data = {
+        "log_relative_edges": edges,
+        "catalogue_scenarios": np.array(
+            ["fragile", "fragile", "resilient", "resilient"]
+        ),
+    }
+    for population, multiplier in (("pointlike", 1), ("extended", 2)):
+        data[f"hist_{population}"] = np.array(
+            [
+                [1, 1, 1, 1, 3, 3, 3, 3],
+                [2, 2, 2, 2, 2, 2, 2, 2],
+                [3, 3, 3, 3, 1, 1, 1, 1],
+                [2, 2, 2, 2, 2, 2, 2, 2],
+            ]
+        ) * multiplier
+        data[f"n_discarded_{population}"] = np.array([16, 16, 16, 16]) * multiplier
+
+    figure = Mock()
+    axes = [Mock(), Mock()]
+    for axis in axes:
+        axis.xaxis = Mock()
+        axis.yaxis = Mock()
+        axis.transAxes = Mock()
+        axis.stairs.side_effect = [Mock(), Mock(), Mock(), Mock()]
+    monkeypatch.setattr(
+        plot.plt,
+        "subplots",
+        Mock(return_value=(figure, np.asarray(axes, dtype=object))),
+    )
+    monkeypatch.setattr(plot.plt, "close", Mock())
+
+    saved = plot.plot_distribution(
+        data=data,
+        population="combined",
+        output_dir=tmp_path,
+        formats=("png", "pdf"),
+        dpi=400,
+        rebin_factor=2,
+    )
+
+    subplots_kwargs = plot.plt.subplots.call_args.kwargs
+    assert subplots_kwargs["sharex"] is True
+    assert subplots_kwargs["sharey"] is True
+    assert subplots_kwargs["figsize"] == (7.5, 8.4)
+    assert axes[0].text.call_args.args == (0.02, 0.97, "Pointlike subhalos")
+    assert axes[0].text.call_args.kwargs == {
+        "transform": axes[0].transAxes,
+        "ha": "left",
+        "va": "top",
+        "fontsize": 15,
+    }
+    assert axes[1].text.call_args.args == (0.02, 0.97, "Extended subhalos")
+    assert axes[1].text.call_args.kwargs == {
+        "transform": axes[1].transAxes,
+        "ha": "left",
+        "va": "top",
+        "fontsize": 15,
+    }
+    assert axes[0].legend.call_count == 1
+    assert axes[1].legend.call_count == 0
+    assert axes[0].legend.call_args.kwargs["loc"] == "upper right"
+    assert axes[0].legend.call_args.kwargs["fontsize"] == 12
+    assert axes[0].legend.call_args.kwargs["ncols"] == 1
+    axes[0].set_ylim.assert_called_once_with(0.0, 37.275)
+    figure.supylabel.assert_called_once_with(
+        r"Fraction of discarded subhalos [\%]",
+        fontsize=15,
+    )
+    assert saved == [
+        tmp_path / "discarded_js_distribution_pointlike_extended.png",
+        tmp_path / "discarded_js_distribution_pointlike_extended.pdf",
     ]

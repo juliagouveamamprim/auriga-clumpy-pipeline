@@ -25,6 +25,7 @@ plt.rcParams.update(
 
 FORMAT_VERSION = 1
 POPULATIONS = ("all", "pointlike", "extended")
+CLI_POPULATIONS = ("combined",) + POPULATIONS
 SCENARIO_ORDER = ("fragile", "resilient")
 DISPLAY_X_LIMITS = (1.0e-12, 1.0e-2)
 
@@ -41,8 +42,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--population",
-        choices=POPULATIONS,
-        default="all",
+        choices=CLI_POPULATIONS,
+        default="combined",
     )
     parser.add_argument(
         "--formats",
@@ -231,6 +232,42 @@ def plot_distribution(
     dpi: int,
     rebin_factor: int,
 ) -> list[Path]:
+    if population == "combined":
+        return plot_combined_distribution(
+            data=data,
+            output_dir=output_dir,
+            formats=formats,
+            dpi=dpi,
+            rebin_factor=rebin_factor,
+        )
+
+    return plot_single_population_distribution(
+        data=data,
+        population=population,
+        output_dir=output_dir,
+        formats=formats,
+        dpi=dpi,
+        rebin_factor=rebin_factor,
+    )
+
+
+def _scenario_order(scenarios: np.ndarray) -> list[str]:
+    available = set(scenarios)
+    ordered = [
+        scenario for scenario in SCENARIO_ORDER if scenario in available
+    ]
+    ordered.extend(sorted(available - set(ordered)))
+    return ordered
+
+
+def _draw_population(
+    axis,
+    data: dict[str, np.ndarray],
+    population: str,
+    rebin_factor: int,
+    *,
+    add_legend: bool,
+) -> tuple[np.ndarray, list, list]:
     edges = np.asarray(data["log_relative_edges"], dtype=np.float64)
     scenarios = np.asarray(data["catalogue_scenarios"], dtype=str)
     histograms = np.asarray(data[f"hist_{population}"], dtype=np.float64)
@@ -240,12 +277,7 @@ def plot_distribution(
         "resilient": "#009988",
     }
 
-    figure, axis = plt.subplots(figsize=(7.5, 5.2), constrained_layout=True)
-    available = set(scenarios)
-    scenario_order = [
-        scenario for scenario in SCENARIO_ORDER if scenario in available
-    ]
-    scenario_order.extend(sorted(available - set(scenario_order)))
+    scenario_order = _scenario_order(scenarios)
     legend_handles = []
     legend_labels = []
     rebinned_log_edges = None
@@ -292,30 +324,36 @@ def plot_distribution(
 
     axis.set_xscale("log")
     axis.set_xlim(*DISPLAY_X_LIMITS)
-    axis.set_xlabel(r"$J_s/J_{s,\max}^{\rm cat}$")
-    axis.set_ylabel(
-        percentage_axis_label(rebinned_log_edges),
-        fontsize=15,
-    )
     axis.tick_params(axis="both", which="both", labelsize=15)
     axis.xaxis.get_offset_text().set_fontsize(15)
     axis.yaxis.get_offset_text().set_fontsize(15)
     axis.grid(False, which="both")
-    axis.legend(
-        handles=legend_handles,
-        labels=legend_labels,
-        ncols=1,
-        loc="upper left",
-        fontsize=11,
-        labelspacing=0.3,
-        handlelength=2.0,
-        handletextpad=0.5,
-        borderaxespad=0.4,
-        frameon=False,
-    )
+    if add_legend:
+        axis.legend(
+            handles=legend_handles,
+            labels=legend_labels,
+            ncols=1,
+            loc="upper right",
+            fontsize=12,
+            labelspacing=0.3,
+            handlelength=2.0,
+            handletextpad=0.5,
+            borderaxespad=0.4,
+            frameon=False,
+        )
+
+    return rebinned_log_edges, legend_handles, legend_labels
+
+
+def _save_figure(
+    figure,
+    output_dir: Path,
+    stem: str,
+    formats: tuple[str, ...],
+    dpi: int,
+) -> list[Path]:
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    stem = f"discarded_js_distribution_{population}"
     saved = []
 
     for output_format in formats:
@@ -329,6 +367,103 @@ def plot_distribution(
 
     plt.close(figure)
     return saved
+
+
+def plot_single_population_distribution(
+    data: dict[str, np.ndarray],
+    population: str,
+    output_dir: Path,
+    formats: tuple[str, ...],
+    dpi: int,
+    rebin_factor: int,
+) -> list[Path]:
+    figure, axis = plt.subplots(figsize=(7.5, 5.2), constrained_layout=True)
+    rebinned_log_edges, _, _ = _draw_population(
+        axis,
+        data,
+        population,
+        rebin_factor,
+        add_legend=True,
+    )
+    axis.set_xlabel(r"$J_s/J_{s,\max}^{\rm cat}$")
+    axis.set_ylabel(percentage_axis_label(rebinned_log_edges), fontsize=15)
+    return _save_figure(
+        figure,
+        output_dir,
+        f"discarded_js_distribution_{population}",
+        formats,
+        dpi,
+    )
+
+
+def plot_combined_distribution(
+    data: dict[str, np.ndarray],
+    output_dir: Path,
+    formats: tuple[str, ...],
+    dpi: int,
+    rebin_factor: int,
+) -> list[Path]:
+    figure, axes = plt.subplots(
+        2,
+        1,
+        figsize=(7.5, 8.4),
+        sharex=True,
+        sharey=True,
+        constrained_layout=True,
+    )
+    panel_populations = ("pointlike", "extended")
+    panel_titles = (
+        "Pointlike subhalos",
+        "Extended subhalos",
+    )
+    aggregates = []
+    for axis, population, title in zip(axes, panel_populations, panel_titles):
+        rebinned_log_edges, _, _ = _draw_population(
+            axis,
+            data,
+            population,
+            rebin_factor,
+            add_legend=population == "pointlike",
+        )
+        axis.text(
+            0.02,
+            0.97,
+            title,
+            transform=axis.transAxes,
+            ha="left",
+            va="top",
+            fontsize=15,
+        )
+        axis.set_xlabel("")
+        aggregates.append((rebinned_log_edges, axis))
+
+    y_max = 0.0
+    for population in panel_populations:
+        scenarios = np.asarray(data["catalogue_scenarios"], dtype=str)
+        histograms = np.asarray(data[f"hist_{population}"], dtype=np.float64)
+        totals = np.asarray(data[f"n_discarded_{population}"], dtype=np.float64)
+        for scenario in _scenario_order(scenarios):
+            aggregate = aggregate_repop_distributions(
+                histograms[scenarios == scenario],
+                totals[scenarios == scenario],
+                data["log_relative_edges"],
+                rebin_factor,
+            )
+            y_max = max(y_max, float(np.max(aggregate["upper"])))
+
+    axes[0].set_ylim(0.0, y_max * 1.05 if y_max > 0.0 else 1.0)
+    axes[-1].set_xlabel(r"$J_s/J_{s,\max}^{\rm cat}$")
+    figure.supylabel(
+        percentage_axis_label(aggregates[0][0]),
+        fontsize=15,
+    )
+    return _save_figure(
+        figure,
+        output_dir,
+        "discarded_js_distribution_pointlike_extended",
+        formats,
+        dpi,
+    )
 
 
 def main() -> None:
