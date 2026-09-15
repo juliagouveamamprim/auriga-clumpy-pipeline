@@ -13,9 +13,9 @@ plt.rcParams.update(
     {
         "text.usetex": True,
         "font.family": "serif",
-        "axes.labelsize": 17,
-        "xtick.labelsize": 15,
-        "ytick.labelsize": 15,
+        "axes.labelsize": 18,
+        "xtick.labelsize": 16,
+        "ytick.labelsize": 16,
     }
 )
 
@@ -196,11 +196,11 @@ def main():
     axis.set_xscale("log")
     axis.set_xlim(1.0e-12, 1.0)
     axis.set_ylim(0.0, 1.02)
-    axis.set_xlabel(r"$J_s/J_{s,\max}^{\rm cat}$")
+    axis.set_xlabel(r"$J_{s,i}/J_s^{\max}$")
     axis.set_ylabel("Cumulative fraction of subhalos")
-    axis.tick_params(axis="both", which="both", labelsize=15)
-    axis.xaxis.get_offset_text().set_fontsize(15)
-    axis.yaxis.get_offset_text().set_fontsize(15)
+    axis.tick_params(axis="both", which="both", labelsize=16)
+    axis.xaxis.get_offset_text().set_fontsize(16)
+    axis.yaxis.get_offset_text().set_fontsize(16)
     axis.grid(False, which="both")
 
     handles, labels = axis.get_legend_handles_labels()

@@ -421,7 +421,7 @@ def plot_combined(
     )
     ax_impact.set_ylabel(
         "Conservative discarded-map peak\n"
-        r"/ $J_{\rm{pixel\,ref}}$"
+        r"/ $J_{\rm ref}^{\rm pix}$"
     )
     ax_impact.set_title(
         "Conservative map-level impact of discarded subhalos"
@@ -496,7 +496,7 @@ def plot_combined(
     ax_integrated.set_xticks(x)
     ax_integrated.set_xticklabels(f_labels)
     ax_integrated.set_xlabel(
-        r"$f$  ($J_{\rm cut}=f\,J_{\rm{pixel\,ref}}$)"
+        r"$f\;(J_{\rm cut}=fJ_{\rm ref}^{\rm pix})$"
     )
     ax_catalog.set_ylabel("Mean retained fraction")
     ax_catalog.set_title(
