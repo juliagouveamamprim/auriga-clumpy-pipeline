@@ -416,19 +416,19 @@ def test_combined_plot_has_shared_two_panel_layout_and_single_legend(
     assert subplots_kwargs["sharex"] is True
     assert subplots_kwargs["sharey"] is True
     assert subplots_kwargs["figsize"] == (7.5, 8.4)
-    assert axes[0].text.call_args.args == (0.02, 0.97, "Pointlike subhalos")
+    assert axes[0].text.call_args.args == (0.02, 0.93, "Pointlike subhalos")
     assert axes[0].text.call_args.kwargs == {
         "transform": axes[0].transAxes,
         "ha": "left",
         "va": "top",
-        "fontsize": 15,
+        "fontsize": 16,
     }
-    assert axes[1].text.call_args.args == (0.02, 0.97, "Extended subhalos")
+    assert axes[1].text.call_args.args == (0.02, 0.93, "Extended subhalos")
     assert axes[1].text.call_args.kwargs == {
         "transform": axes[1].transAxes,
         "ha": "left",
         "va": "top",
-        "fontsize": 15,
+        "fontsize": 16,
     }
     assert axes[0].legend.call_count == 1
     assert axes[1].legend.call_count == 0

@@ -427,12 +427,12 @@ def plot_combined_distribution(
         )
         axis.text(
             0.02,
-            0.97,
+            0.93,
             title,
             transform=axis.transAxes,
             ha="left",
             va="top",
-            fontsize=15,
+            fontsize=16,
         )
         axis.set_xlabel("")
         aggregates.append((rebinned_log_edges, axis))
