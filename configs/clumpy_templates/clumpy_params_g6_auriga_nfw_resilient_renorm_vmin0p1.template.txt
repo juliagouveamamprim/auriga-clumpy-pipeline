@@ -16,15 +16,15 @@
 # - External halos are read from gLIST_HALOES.
 # - Full-sky HEALPix map: NSIDE = 1024, FOV = 360 deg x 180 deg.
 #
-# Renormalization run used:
-#   script: renormalize_mw_profile.py
-#   input_yaml: Auriga_tables/V0p1/input_data.yml
+# Deterministic renormalization used:
+#   script: scripts/renormalize_mw_profile.py
+#   input_yaml: configs/input_hydro.yml
 #   scenario: resilient
-#   sub_mass_radius: rs
 #   Vmax range: [0.1, 120.0] km/s
-#   N_MC: 1000000
-#   seed: 12345
-#   include_cv_scatter: True
+#   M_sub_total is the SHVF expectation integrated deterministically.
+#   The Gaussian scatter in log10(cV) is integrated with Gauss-Hermite
+#   quadrature, and each subhalo contributes M_sub = M(<r_s).
+#   Catalogue cuts do not enter this smooth-halo normalization.
 #
 # SHVF/cV inputs interpreted by the renormalization:
 #   SHVF: dN/dV = 10^bb V^mm
@@ -40,18 +40,12 @@
 #
 # Renormalization summary:
 #   N_expected_from_SHVF        = 1.2631335872e+08
-#   mean individual M_sub       = 9.1054202638e+01 Msun
-#   M_smooth_old(<R_match)      = 1.4252163756e+12 Msun
-#   M_sub_expected              = 1.1501362161e+10 Msun
-#   M_smooth_new(<R_match)      = 1.4137150135e+12 Msun
-#   rho0_host_new               = 8.9670480499e+06 Msun/kpc^3
-#   rho0_rescale_factor         = 9.9193009401e-01
-#   double_counted_fraction     = 8.0699059860e-03
-#   double_counted_percent      = 8.0699059860e-01 %
+#   M_sub_expected              = 1.5697249309e+10 Msun
+#   m_sub                       = 1.101394 %
+#   rho0_rescale_factor         = 0.98898606
 #
 # CLUMPY value updated below:
-#   gMW_RHOSOL old = 3.9767947420e-01 GeV/cm^3
-#   gMW_RHOSOL new = 3.9447023823e-01 GeV/cm^3
+#   gMW_RHOSOL new = 0.3932994559 GeV/cm^3
 #
 # NOTE:
 #   This is a template. For production runs, another script may overwrite
@@ -85,7 +79,7 @@ gMW_TOT_SHAPE_PARAMS_2                  [-]            1                 <float>
 gMW_TOT_RSCALE                          [kpc]          20.0              <float>           Scale radius of total Dark Matter halo profile
 gMW_RMAX                                [kpc]          220               <float>           Virial radius of Dark Matter halo
 gMW_RSOL                                [kpc]          8.5               <float>           Sun's distance from the Gal. center
-gMW_RHOSOL                              [GeV/cm3]      3.9447023823e-01      <float>           Local Dark Matter density; renormalized for hydro_resilient, Vmax=[0.1,120] km/s
+gMW_RHOSOL                              [GeV/cm3]      0.3932994559          <float>           Local Dark Matter density; deterministic hydro_resilient renormalization, Vmax=[0.1,120] km/s
 gMW_TRIAXIAL_IS                         [-]            0                 <boolean (0/1)>   Triaxial halo (True/False)
 gMW_SUBS_FLAG_PROFILE                   [-]            kHOST             <string>          Halo profile of subclumps
 gMW_SUBS_SHAPE_PARAMS_0                 [-]            kHOST             <float or kHOST>  Shape parameter 1 of subclumps halo profile

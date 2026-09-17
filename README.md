@@ -17,6 +17,15 @@ For each independent repopulation and hydro scenario, the pipeline:
 9. Combines the corrected CLUMPY map with the pointlike map.
 10. Optionally produces Mollweide plots of all components.
 
+The smooth-Milky-Way normalization is computed separately and deterministically
+from the expected MHD subhalo population. See
+[`diagnostics/renormalization/README.md`](diagnostics/renormalization/README.md)
+and run:
+
+```bash
+python3 scripts/renormalize_mw_profile.py both
+```
+
 ## HDF5 catalogs
 
 Each repopulation is stored under:
@@ -290,9 +299,11 @@ Jpointlike_per_sr
 │   ├── prepare_subhalo_components.py
 │   ├── run_clumpy_batch.sh
 │   ├── run_clumpy_one_case.sh
-│   └── run_repopulation.py
+│   ├── run_repopulation.py
+│   └── renormalize_mw_profile.py
 ├── src/
-│   └── repop_algorithm.py
+│   ├── repop_algorithm.py
+│   └── renormalization.py
 └── tests/
     ├── test_build_table.py
     ├── test_combine_clumpy_pointlike.py
