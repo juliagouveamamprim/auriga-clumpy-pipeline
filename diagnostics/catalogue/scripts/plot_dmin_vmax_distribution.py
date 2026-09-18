@@ -241,11 +241,49 @@ def decode_column_names(raw_names: np.ndarray) -> list[str]:
 
 def read_earth_position(handle: h5py.File, path: Path) -> np.ndarray:
     """Read the observer position saved alongside this catalogue."""
-    location = "inputs/host/position_Earth/value"
-    if location not in handle:
-        raise KeyError(f"Expected dataset {location!r} not found in {path}")
-    position = np.asarray(handle[location][...], dtype=np.float64)
-    if position.shape != (3,) or np.any(~np.isfinite(position)):
+    base_location = "inputs/host/position_Earth"
+    unit_location = f"{base_location}/unit"
+    value_location = f"{base_location}/value"
+    if unit_location not in handle:
+        raise KeyError(f"Expected dataset {unit_location!r} not found in {path}")
+    if value_location not in handle:
+        raise KeyError(f"Expected group {value_location!r} not found in {path}")
+
+    unit_dataset = handle[unit_location]
+    if not isinstance(unit_dataset, h5py.Dataset):
+        raise ValueError(f"Expected dataset {unit_location!r} in {path}")
+    raw_unit = unit_dataset[()]
+    unit = raw_unit.decode() if isinstance(raw_unit, bytes) else str(raw_unit)
+    if unit != "kpc":
+        raise ValueError(
+            f"Unexpected observer-position unit in {path}: "
+            f"expected 'kpc', found {unit!r}."
+        )
+
+    value_group = handle[value_location]
+    if not isinstance(value_group, h5py.Group):
+        raise ValueError(f"Expected group {value_location!r} in {path}")
+
+    values = []
+    for component in range(3):
+        item_location = f"{value_location}/item_{component}"
+        if item_location not in handle:
+            raise KeyError(
+                f"Expected dataset {item_location!r} not found in {path}"
+            )
+        item_dataset = handle[item_location]
+        if not isinstance(item_dataset, h5py.Dataset):
+            raise ValueError(f"Expected dataset {item_location!r} in {path}")
+        raw_value = np.asarray(item_dataset[...], dtype=np.float64)
+        if raw_value.shape != () or not np.isfinite(raw_value.item()):
+            raise ValueError(
+                f"Invalid observer-position component {component} in {path}: "
+                "expected one finite scalar in kpc."
+            )
+        values.append(raw_value.item())
+
+    position = np.asarray(values, dtype=np.float64)
+    if position.shape != (3,):
         raise ValueError(
             f"Invalid observer position in {path}: expected three finite kpc values."
         )
