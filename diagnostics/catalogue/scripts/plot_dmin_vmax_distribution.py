@@ -27,7 +27,6 @@ plt.rcParams.update(
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 EXPECTED_REPOPULATIONS = 500
-REPOP_IDS = range(EXPECTED_REPOPULATIONS)
 VALID_SCENARIOS = ("fragile", "resilient")
 SCENARIO_COLORS = {
     "fragile": "#EE3377",
@@ -79,6 +78,18 @@ def parse_args() -> argparse.Namespace:
         help="Disruption scenario to process (default: resilient).",
     )
     parser.add_argument(
+        "--repop-start",
+        type=int,
+        default=0,
+        help="First repopulation ID to process (default: 0).",
+    )
+    parser.add_argument(
+        "--n-repops",
+        type=int,
+        default=EXPECTED_REPOPULATIONS,
+        help="Number of consecutive repopulations to process (default: 500).",
+    )
+    parser.add_argument(
         "--n-bins",
         type=int,
         default=30,
@@ -107,6 +118,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    if args.repop_start < 0:
+        raise ValueError("--repop-start must be non-negative.")
+    if args.n_repops <= 0:
+        raise ValueError("--n-repops must be positive.")
+    if args.repop_start + args.n_repops > EXPECTED_REPOPULATIONS:
+        raise ValueError(
+            "Requested repopulation interval must lie within IDs 0--499."
+        )
     if args.n_bins <= 0:
         raise ValueError("--n-bins must be positive.")
     if args.chunk_size <= 0:
@@ -127,10 +146,19 @@ def catalogue_path(input_root: Path, repop_id: int, scenario: str) -> Path:
     )
 
 
-def validate_catalogue_files(input_root: Path, scenario: str) -> None:
-    """Require one HDF5 catalogue for every expected repopulation."""
+def make_repop_ids(repop_start: int, n_repops: int) -> range:
+    """Return the validated consecutive repopulation interval."""
+    return range(repop_start, repop_start + n_repops)
+
+
+def validate_catalogue_files(
+    input_root: Path,
+    scenario: str,
+    repop_ids: range,
+) -> None:
+    """Require one HDF5 catalogue for every requested repopulation."""
     paths = [
-        catalogue_path(input_root, repop_id, scenario) for repop_id in REPOP_IDS
+        catalogue_path(input_root, repop_id, scenario) for repop_id in repop_ids
     ]
     missing = [path for path in paths if not path.is_file()]
     if missing:
@@ -138,16 +166,21 @@ def validate_catalogue_files(input_root: Path, scenario: str) -> None:
         remaining = len(missing) - min(len(missing), 10)
         suffix = "" if remaining == 0 else f"\n  ... and {remaining} more"
         raise FileNotFoundError(
-            f"Scenario {scenario!r} is missing {len(missing)} of "
-            f"{EXPECTED_REPOPULATIONS} HDF5 catalogues:\n{preview}{suffix}"
+            f"Scenario {scenario!r} is missing {len(missing)} requested "
+            f"HDF5 catalogue(s):\n{preview}{suffix}"
         )
 
 
-def load_dmin_values(path: Path, scenario: str) -> dict[int, float]:
-    """Read one D_min per repopulation for the requested scenario."""
+def load_dmin_values(
+    path: Path,
+    scenario: str,
+    repop_ids: range,
+) -> dict[int, float]:
+    """Read one D_min for each requested repopulation and scenario."""
     if not path.is_file():
         raise FileNotFoundError(f"Input CSV not found: {path}")
 
+    requested_ids = set(repop_ids)
     dmin_by_repop: dict[int, float] = {}
     with path.open(newline="", encoding="utf-8") as stream:
         reader = csv.DictReader(stream)
@@ -160,6 +193,13 @@ def load_dmin_values(path: Path, scenario: str) -> dict[int, float]:
                 continue
             try:
                 repop_id = int(row["repop_id"])
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    f"Invalid {scenario} row on line {line_number}: {row}"
+                ) from error
+            if repop_id not in requested_ids:
+                continue
+            try:
                 dmin = float(row["min_dgc_kpc"])
             except (TypeError, ValueError) as error:
                 raise ValueError(
@@ -176,19 +216,17 @@ def load_dmin_values(path: Path, scenario: str) -> dict[int, float]:
                 )
             dmin_by_repop[repop_id] = dmin
 
-    expected_ids = set(REPOP_IDS)
+    expected_ids = requested_ids
     actual_ids = set(dmin_by_repop)
     if actual_ids != expected_ids:
         missing_ids = sorted(expected_ids - actual_ids)
-        unexpected_ids = sorted(actual_ids - expected_ids)
-        details = []
+        details: list[str] = []
         if missing_ids:
             details.append(f"missing IDs: {missing_ids[:10]}")
-        if unexpected_ids:
-            details.append(f"unexpected IDs: {unexpected_ids[:10]}")
         raise ValueError(
             f"Scenario {scenario!r} must contain exactly "
-            f"{EXPECTED_REPOPULATIONS} repopulations (IDs 0--499); "
+            f"{len(expected_ids)} requested repopulation(s) "
+            f"(IDs {repop_ids.start}--{repop_ids.stop - 1}); "
             + "; ".join(details)
         )
     return dmin_by_repop
@@ -348,11 +386,12 @@ def plot_vmax_distribution(
 def main() -> None:
     args = parse_args()
     validate_args(args)
-    csv_dmins = load_dmin_values(args.input_csv, args.scenario)
-    validate_catalogue_files(args.input_root, args.scenario)
+    repop_ids = make_repop_ids(args.repop_start, args.n_repops)
+    csv_dmins = load_dmin_values(args.input_csv, args.scenario, repop_ids)
+    validate_catalogue_files(args.input_root, args.scenario, repop_ids)
 
     vmax_values = []
-    for sequence, repop_id in enumerate(REPOP_IDS, start=1):
+    for sequence, repop_id in enumerate(repop_ids, start=1):
         path = catalogue_path(args.input_root, repop_id, args.scenario)
         hdf5_dmin, vmax = find_dmin_subhalo_vmax(path, args.chunk_size)
         csv_dmin = csv_dmins[repop_id]
@@ -369,16 +408,16 @@ def main() -> None:
             )
         vmax_values.append(vmax)
         print(
-            f"[{sequence:03d}/{EXPECTED_REPOPULATIONS:03d}] "
+            f"[{sequence:03d}/{len(repop_ids):03d}] "
             f"repop_{repop_id:04d} {args.scenario}: "
             f"D_min={hdf5_dmin:.8g} kpc | Vmax={vmax:.8g} km s^-1",
             flush=True,
         )
 
     values = np.asarray(vmax_values, dtype=np.float64)
-    if values.shape != (EXPECTED_REPOPULATIONS,):
+    if values.shape != (len(repop_ids),):
         raise RuntimeError(
-            f"Expected {EXPECTED_REPOPULATIONS} Vmax values; got {values.size}."
+            f"Expected {len(repop_ids)} Vmax values; got {values.size}."
         )
     plot_vmax_distribution(
         values=values,
