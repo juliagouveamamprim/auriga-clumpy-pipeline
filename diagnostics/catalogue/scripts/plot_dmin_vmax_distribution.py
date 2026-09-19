@@ -5,24 +5,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 from pathlib import Path
+import tempfile
+from typing import Iterable
 
 import h5py
-import matplotlib.pyplot as plt
 import numpy as np
-
-
-plt.rcParams.update(
-    {
-        "text.usetex": True,
-        "font.family": "serif",
-        "axes.labelsize": 17,
-        "axes.titlesize": 18,
-        "xtick.labelsize": 15,
-        "ytick.labelsize": 15,
-        "legend.fontsize": 15.5,
-    }
-)
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -34,6 +23,13 @@ SCENARIO_COLORS = {
 }
 REQUIRED_CSV_COLUMNS = {"scenario", "repop_id", "min_dgc_kpc"}
 REQUIRED_DATA_COLUMNS = {"Vmax", "Xearth", "Yearth", "Zearth"}
+OUTPUT_CSV_COLUMNS = (
+    "scenario",
+    "repop_id",
+    "source_h5",
+    "dmin_kpc",
+    "vmax_kms",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -60,6 +56,18 @@ def parse_args() -> argparse.Namespace:
         / "diagnostics"
         / "full_catalogue_dgc_0500.csv",
         help="CSV containing scenario, repop_id, and min_dgc_kpc.",
+    )
+    parser.add_argument(
+        "--output-csv",
+        type=Path,
+        default=REPOSITORY_ROOT
+        / "outputs"
+        / "diagnostics"
+        / "dmin_vmax_distribution.csv",
+        help=(
+            "Checkpoint CSV for scenario, repopulation, source HDF5, D_min, "
+            "and Vmax values."
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -114,6 +122,17 @@ def parse_args() -> argparse.Namespace:
         help="Absolute tolerance in kpc for the HDF5/CSV D_min check.",
     )
     parser.add_argument("--dpi", type=int, default=220)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--skip-plot",
+        action="store_true",
+        help="Scan and checkpoint CSV values without initializing or saving a plot.",
+    )
+    mode.add_argument(
+        "--plot-only",
+        action="store_true",
+        help="Read the checkpoint CSV only and write the Vmax histogram.",
+    )
     return parser.parse_args()
 
 
@@ -154,7 +173,7 @@ def make_repop_ids(repop_start: int, n_repops: int) -> range:
 def validate_catalogue_files(
     input_root: Path,
     scenario: str,
-    repop_ids: range,
+    repop_ids: Iterable[int],
 ) -> None:
     """Require one HDF5 catalogue for every requested repopulation."""
     paths = [
@@ -174,7 +193,7 @@ def validate_catalogue_files(
 def load_dmin_values(
     path: Path,
     scenario: str,
-    repop_ids: range,
+    repop_ids: Iterable[int],
 ) -> dict[int, float]:
     """Read one D_min for each requested repopulation and scenario."""
     if not path.is_file():
@@ -225,11 +244,161 @@ def load_dmin_values(
             details.append(f"missing IDs: {missing_ids[:10]}")
         raise ValueError(
             f"Scenario {scenario!r} must contain exactly "
-            f"{len(expected_ids)} requested repopulation(s) "
-            f"(IDs {repop_ids.start}--{repop_ids.stop - 1}); "
+            f"{len(expected_ids)} requested repopulation(s); "
             + "; ".join(details)
         )
     return dmin_by_repop
+
+
+def parse_output_repop_id(value: str, line_number: int) -> int:
+    """Parse and validate one repopulation ID in the checkpoint CSV."""
+    try:
+        repop_id = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"Invalid repop_id on line {line_number}: {value!r}."
+        ) from error
+    if not 0 <= repop_id < EXPECTED_REPOPULATIONS:
+        raise ValueError(
+            f"repop_id on line {line_number} must lie within IDs 0--499."
+        )
+    return repop_id
+
+
+def parse_positive_output_float(
+    value: str,
+    column: str,
+    line_number: int,
+) -> float:
+    """Parse a finite, strictly positive checkpoint value."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"Invalid {column} on line {line_number}: {value!r}."
+        ) from error
+    if not np.isfinite(parsed) or parsed <= 0.0:
+        raise ValueError(
+            f"{column} on line {line_number} must be finite and positive."
+        )
+    return parsed
+
+
+def validate_source_h5(source_h5: str, line_number: int) -> str:
+    """Require a non-empty HDF5 source path without requiring it to exist."""
+    if not source_h5 or source_h5 != source_h5.strip():
+        raise ValueError(
+            f"source_h5 on line {line_number} must be a non-empty path."
+        )
+    if Path(source_h5).suffix.lower() not in {".h5", ".hdf5"}:
+        raise ValueError(
+            f"source_h5 on line {line_number} must name an HDF5 file."
+        )
+    return source_h5
+
+
+def load_output_records(path: Path) -> dict[tuple[str, int], dict[str, object]]:
+    """Load a fully validated Vmax checkpoint CSV, if it already exists."""
+    if not path.exists():
+        return {}
+    if not path.is_file():
+        raise ValueError(f"Checkpoint CSV is not a regular file: {path}")
+
+    records: dict[tuple[str, int], dict[str, object]] = {}
+    with path.open(newline="", encoding="utf-8") as stream:
+        reader = csv.DictReader(stream)
+        fieldnames = reader.fieldnames
+        if fieldnames is None:
+            raise ValueError(f"Checkpoint CSV has no header: {path}")
+        if tuple(fieldnames) != OUTPUT_CSV_COLUMNS:
+            raise ValueError(
+                "Checkpoint CSV schema must be exactly "
+                f"{list(OUTPUT_CSV_COLUMNS)}; found {fieldnames}."
+            )
+
+        for line_number, row in enumerate(reader, start=2):
+            if None in row or set(row) != set(OUTPUT_CSV_COLUMNS):
+                raise ValueError(
+                    f"Checkpoint CSV has malformed fields on line {line_number}."
+                )
+            scenario = row["scenario"]
+            if scenario not in VALID_SCENARIOS:
+                raise ValueError(
+                    f"Invalid scenario on line {line_number}: {scenario!r}."
+                )
+            repop_id = parse_output_repop_id(row["repop_id"], line_number)
+            source_h5 = validate_source_h5(row["source_h5"], line_number)
+            dmin_kpc = parse_positive_output_float(
+                row["dmin_kpc"], "dmin_kpc", line_number
+            )
+            vmax_kms = parse_positive_output_float(
+                row["vmax_kms"], "vmax_kms", line_number
+            )
+            key = (scenario, repop_id)
+            if key in records:
+                raise ValueError(
+                    "Duplicate checkpoint key for "
+                    f"scenario={scenario!r}, repop_id={repop_id}."
+                )
+            records[key] = {
+                "scenario": scenario,
+                "repop_id": repop_id,
+                "source_h5": source_h5,
+                "dmin_kpc": dmin_kpc,
+                "vmax_kms": vmax_kms,
+            }
+    return records
+
+
+def write_output_records_atomic(
+    path: Path,
+    records: dict[tuple[str, int], dict[str, object]],
+) -> None:
+    """Atomically replace the checkpoint CSV after a validated repopulation."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            newline="",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary_name = stream.name
+            writer = csv.DictWriter(stream, fieldnames=OUTPUT_CSV_COLUMNS)
+            writer.writeheader()
+            for key in sorted(records):
+                writer.writerow(records[key])
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_name, path)
+        directory_descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except BaseException:
+        if temporary_name is not None:
+            Path(temporary_name).unlink(missing_ok=True)
+        raise
+
+
+def validate_completed_source(
+    record: dict[str, object],
+    expected_path: Path,
+) -> None:
+    """Ensure a resumed checkpoint still refers to this scan's HDF5 file."""
+    recorded_path = Path(str(record["source_h5"])).resolve(strict=False)
+    expected_path = expected_path.resolve(strict=False)
+    if recorded_path != expected_path:
+        raise ValueError(
+            "Checkpoint source_h5 does not match the requested catalogue for "
+            f"scenario={record['scenario']!r}, repop_id={record['repop_id']}: "
+            f"{recorded_path} != {expected_path}."
+        )
 
 
 def decode_column_names(raw_names: np.ndarray) -> list[str]:
@@ -391,6 +560,19 @@ def plot_vmax_distribution(
     dpi: int,
 ) -> list[Path]:
     """Draw and save the absolute-count Vmax histogram."""
+    import matplotlib.pyplot as plt
+
+    plt.rcParams.update(
+        {
+            "text.usetex": True,
+            "font.family": "serif",
+            "axes.labelsize": 17,
+            "axes.titlesize": 18,
+            "xtick.labelsize": 15,
+            "ytick.labelsize": 15,
+            "legend.fontsize": 15.5,
+        }
+    )
     figure, axis = plt.subplots(figsize=(7.0, 5.2), constrained_layout=True)
     axis.hist(
         values,
@@ -421,15 +603,50 @@ def plot_vmax_distribution(
     return saved
 
 
-def main() -> None:
-    args = parse_args()
-    validate_args(args)
-    repop_ids = make_repop_ids(args.repop_start, args.n_repops)
-    csv_dmins = load_dmin_values(args.input_csv, args.scenario, repop_ids)
-    validate_catalogue_files(args.input_root, args.scenario, repop_ids)
+def requested_records(
+    records: dict[tuple[str, int], dict[str, object]],
+    scenario: str,
+    repop_ids: Iterable[int],
+) -> list[dict[str, object]]:
+    """Return every requested checkpoint record, rejecting incomplete scans."""
+    selected: list[dict[str, object]] = []
+    missing_ids: list[int] = []
+    for repop_id in repop_ids:
+        record = records.get((scenario, repop_id))
+        if record is None:
+            missing_ids.append(repop_id)
+        else:
+            selected.append(record)
+    if missing_ids:
+        raise ValueError(
+            f"Checkpoint CSV is missing {len(missing_ids)} requested "
+            f"{scenario!r} repopulation(s): {missing_ids[:10]}."
+        )
+    return selected
 
-    vmax_values = []
-    for sequence, repop_id in enumerate(repop_ids, start=1):
+
+def scan_catalogues(
+    args: argparse.Namespace,
+    repop_ids: range,
+    records: dict[tuple[str, int], dict[str, object]],
+) -> None:
+    """Scan only missing catalogues, validating and checkpointing each one."""
+    pending_ids: list[int] = []
+    for repop_id in repop_ids:
+        existing = records.get((args.scenario, repop_id))
+        expected_path = catalogue_path(args.input_root, repop_id, args.scenario)
+        if existing is None:
+            pending_ids.append(repop_id)
+        else:
+            validate_completed_source(existing, expected_path)
+
+    if not pending_ids:
+        print("All requested repopulations are already checkpointed.")
+        return
+
+    csv_dmins = load_dmin_values(args.input_csv, args.scenario, pending_ids)
+    validate_catalogue_files(args.input_root, args.scenario, pending_ids)
+    for sequence, repop_id in enumerate(pending_ids, start=1):
         path = catalogue_path(args.input_root, repop_id, args.scenario)
         hdf5_dmin, vmax = find_dmin_subhalo_vmax(path, args.chunk_size)
         csv_dmin = csv_dmins[repop_id]
@@ -444,15 +661,36 @@ def main() -> None:
                 f"{hdf5_dmin:.17e} kpc, CSV={csv_dmin:.17e} kpc "
                 f"(rtol={args.dmin_rtol:g}, atol={args.dmin_atol_kpc:g} kpc)."
             )
-        vmax_values.append(vmax)
+        records[(args.scenario, repop_id)] = {
+            "scenario": args.scenario,
+            "repop_id": repop_id,
+            "source_h5": str(path.resolve(strict=False)),
+            "dmin_kpc": hdf5_dmin,
+            "vmax_kms": vmax,
+        }
+        write_output_records_atomic(args.output_csv, records)
         print(
-            f"[{sequence:03d}/{len(repop_ids):03d}] "
+            f"[{sequence:03d}/{len(pending_ids):03d}] "
             f"repop_{repop_id:04d} {args.scenario}: "
             f"D_min={hdf5_dmin:.8g} kpc | Vmax={vmax:.8g} km s^-1",
             flush=True,
         )
 
-    values = np.asarray(vmax_values, dtype=np.float64)
+
+def run(args: argparse.Namespace) -> None:
+    """Run either the resumable HDF5 scan or the CSV-only plotting stage."""
+    repop_ids = make_repop_ids(args.repop_start, args.n_repops)
+    records = load_output_records(args.output_csv)
+    if not args.plot_only:
+        scan_catalogues(args, repop_ids, records)
+    if args.skip_plot:
+        return
+
+    selected = requested_records(records, args.scenario, repop_ids)
+    values = np.asarray(
+        [record["vmax_kms"] for record in selected],
+        dtype=np.float64,
+    )
     if values.shape != (len(repop_ids),):
         raise RuntimeError(
             f"Expected {len(repop_ids)} Vmax values; got {values.size}."
@@ -464,6 +702,12 @@ def main() -> None:
         n_bins=args.n_bins,
         dpi=args.dpi,
     )
+
+
+def main() -> None:
+    args = parse_args()
+    validate_args(args)
+    run(args)
 
 
 if __name__ == "__main__":
