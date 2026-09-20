@@ -33,6 +33,8 @@ COLUMN_NAMES = [
     "Zearth",
 ]
 
+SYNTHETIC_GMW_RHOSOL = 0.4
+
 
 def checksum(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -99,9 +101,10 @@ def make_case_inputs(
     )
     template.parent.mkdir(parents=True, exist_ok=True)
     if template_gmw is None:
-        template_gmw = prep.SCIENTIFIC_GMW_RHOSOL[scenario]
+        template_gmw = SYNTHETIC_GMW_RHOSOL
     template.write_text(
         "# Synthetic scientific template\n"
+        f"# Scenario: hydro_{scenario}\n"
         f"gMW_RHOSOL [GeV/cm3] {template_gmw:.10e} <float> fixed\n"
         "gSIM_HEALPIX_NSIDE [-] 8 <integer> test\n",
         encoding="utf-8",
@@ -168,16 +171,17 @@ def test_manifest_writer_rejects_nonfinite_json(tmp_path):
     assert list(tmp_path.glob(".*.tmp")) == []
 
 
-@pytest.mark.parametrize(
-    ("scenario", "expected"),
-    [
-        ("resilient", 3.9447023823e-1),
-        ("fragile", 3.9570067534e-1),
-    ],
-)
-def test_reads_fixed_gmw_rhosol_from_original_templates(scenario, expected):
-    assert prep.read_gmw_rhosol(prep.get_template_path(scenario)) == pytest.approx(
-        expected
+@pytest.mark.parametrize("scenario", ("resilient", "fragile"))
+def test_official_template_declares_scenario_and_finite_gmw(scenario):
+    template_path = prep.get_template_path(scenario)
+    template_bytes = template_path.read_bytes()
+
+    assert prep.read_template_scenario_from_bytes(template_bytes) == scenario
+    assert np.isfinite(
+        prep.read_gmw_rhosol_from_bytes(
+            template_bytes,
+            source_description=str(template_path),
+        )
     )
 
 
@@ -213,6 +217,26 @@ def test_prepare_case_rejects_template_from_other_scenario(tmp_path):
         base_run_dir=tmp_path / "outputs" / "clumpy",
     )
     assert not case_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "template_text",
+    [
+        "gMW_RHOSOL [GeV/cm3] 0.4 <float> fixed\n",
+        (
+            "# Scenario: hydro_fragile\n"
+            "# Scenario: hydro_resilient\n"
+            "gMW_RHOSOL [GeV/cm3] 0.4 <float> fixed\n"
+        ),
+    ],
+)
+def test_template_scenario_marker_must_be_unique(template_text):
+    with pytest.raises(ValueError, match="Expected exactly one"):
+        prep.validate_template_scenario(
+            template_text.encode("utf-8"),
+            "resilient",
+            "synthetic template",
+        )
 
 
 @pytest.mark.parametrize("scenario", ["resilient", "fragile"])
@@ -262,7 +286,7 @@ def test_prepare_case_writes_complete_relative_manifest(tmp_path, scenario):
     assert cuts["pointlike_j_cut"] == pytest.approx(1e17)
     assert manifest["scientific_configuration"]["smooth_milky_way"][
         "gMW_RHOSOL_GeV_cm3"
-    ] == pytest.approx(prep.SCIENTIFIC_GMW_RHOSOL[scenario])
+    ] == pytest.approx(SYNTHETIC_GMW_RHOSOL)
 
     for source_name, expected_path in (
         ("hdf5", input_h5),

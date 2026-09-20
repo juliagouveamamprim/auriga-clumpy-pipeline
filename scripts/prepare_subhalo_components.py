@@ -104,11 +104,6 @@ DEFAULT_POINTLIKE_CUT_F = 1.0e-3
 
 PREPARATION_MANIFEST_SCHEMA_VERSION = 1
 
-SCIENTIFIC_GMW_RHOSOL = {
-    "resilient": 3.9447023823e-1,
-    "fragile": 3.9570067534e-1,
-}
-
 KNOWN_HDF5_GROUP_ATTRIBUTES = (
     "n_generated",
     "n_removed_engulfing",
@@ -444,14 +439,51 @@ def read_gmw_rhosol(template_path):
     )
 
 
-def validate_template_scenario(scenario, gmw_rhosol, source_description):
-    """Reject a template whose fixed MW normalization belongs to another case."""
-    expected = SCIENTIFIC_GMW_RHOSOL[scenario]
-    if not math.isclose(gmw_rhosol, expected, rel_tol=1.0e-12, abs_tol=0.0):
+def read_template_scenario_from_bytes(
+    template_bytes,
+    source_description="template",
+):
+    """Read the unique ``# Scenario: hydro_<scenario>`` template marker."""
+    try:
+        template_text = template_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"CLUMPY template is not valid UTF-8: {source_description}"
+        ) from exc
+
+    marker_prefix = "# Scenario:"
+    matches = []
+    for line in template_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(marker_prefix):
+            matches.append(stripped[len(marker_prefix):].strip())
+
+    if len(matches) != 1:
+        raise ValueError(
+            "Expected exactly one '# Scenario: hydro_<scenario>' marker in "
+            f"template {source_description}, found {len(matches)}."
+        )
+
+    marker = matches[0]
+    if marker not in ("hydro_fragile", "hydro_resilient"):
+        raise ValueError(
+            f"Invalid CLUMPY template scenario marker {marker!r} in "
+            f"{source_description}."
+        )
+
+    return marker.removeprefix("hydro_")
+
+
+def validate_template_scenario(template_bytes, scenario, source_description):
+    """Reject a template whose explicit scenario marker differs from the case."""
+    template_scenario = read_template_scenario_from_bytes(
+        template_bytes,
+        source_description=source_description,
+    )
+    if template_scenario != scenario:
         raise ValueError(
             f"CLUMPY template does not match scenario {scenario!r}: "
-            f"gMW_RHOSOL={gmw_rhosol:.10e}, expected {expected:.10e} in "
-            f"{source_description}."
+            f"marker declares {template_scenario!r} in {source_description}."
         )
 
 
@@ -1852,7 +1884,7 @@ def prepare_case(
         template_bytes,
         source_description=str(template_path),
     )
-    validate_template_scenario(scenario, gmw_rhosol, str(template_path))
+    validate_template_scenario(template_bytes, scenario, str(template_path))
 
     with PreparationCaseLock(
         lock_path,
