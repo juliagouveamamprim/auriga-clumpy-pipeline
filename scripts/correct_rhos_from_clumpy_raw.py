@@ -41,6 +41,7 @@ The corrected list is written to:
 
 import argparse
 import math
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -256,7 +257,7 @@ def load_rendered_log(path):
     df["J_rendered"] = pd.to_numeric(df["J_rendered"], errors="coerce")
     df["npix_touched"] = pd.to_numeric(df["npix_touched"], errors="coerce")
 
-    df = df.dropna(subset=["halo_name", "J_rendered"]).copy()
+    df = df.dropna(subset=["halo_name"]).copy()
     df["HALO_INDEX"] = df["HALO_INDEX"].astype(int)
 
     if df.empty:
@@ -324,6 +325,17 @@ def build_matched_table(list_df, rendered_df):
         X = 1/sqrt(R)
         rhos_new = X * rhos_old
     """
+    raw_names = set(list_df["halo_name"])
+    rendered_names = set(rendered_df["halo_name"])
+    raw_only = raw_names - rendered_names
+    log_only = rendered_names - raw_names
+
+    if raw_only or log_only:
+        raise RuntimeError(
+            "Halo identifier mismatch: "
+            f"raw-only={len(raw_only)}, log-only={len(log_only)}"
+        )
+
     df = list_df.merge(
         rendered_df[["halo_name", "J_rendered", "npix_touched", "HALO_INDEX"]],
         on="halo_name",
@@ -336,6 +348,15 @@ def build_matched_table(list_df, rendered_df):
         np.isfinite(df["J_rendered"]) & (df["J_rendered"] > 0.0) &
         np.isfinite(df["rhos_old"]) & (df["rhos_old"] > 0.0)
     )
+
+    n_excluded = int((~valid).sum())
+    if n_excluded:
+        warnings.warn(
+            f"Excluded {n_excluded} matched halos with invalid correction inputs; "
+            "their original rhos values will be retained.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     df = df[valid].copy()
 
