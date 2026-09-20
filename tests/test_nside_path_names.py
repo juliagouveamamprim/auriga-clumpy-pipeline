@@ -1,5 +1,8 @@
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -60,3 +63,37 @@ def test_correction_and_combine_paths_use_nside():
 
     assert plot_input == total_fits
     assert plot_output.name == "repop_0230_nside2048"
+
+
+def test_correction_rejects_incomplete_identifier_correspondence(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(corr, "BASE_RUN_DIR", tmp_path)
+    monkeypatch.setattr(
+        corr,
+        "parse_args",
+        lambda: SimpleNamespace(repop_id=1, scenario="fragile", nside=2048),
+    )
+
+    paths = corr.get_paths(1, "fragile", 2048)
+    paths["input_list"].parent.mkdir(parents=True)
+    paths["rendered_log"].parent.mkdir(parents=True)
+
+    paths["input_list"].write_text(
+        "halo_a GAL 0 0 10 0 1 1 1 NFW 1 2 3\n"
+        "halo_b GAL 0 0 10 0 1 1 1 NFW 1 2 3\n",
+        encoding="utf-8",
+    )
+    paths["rendered_log"].write_text(
+        "0 halo_a GAL 1e20 1\n"
+        "1 halo_c GAL 1e20 1\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError):
+        corr.main()
+
+    assert not paths["output_table"].exists()
+    assert not paths["plot_R_vs_theta"].exists()
+    assert not paths["output_list"].exists()
