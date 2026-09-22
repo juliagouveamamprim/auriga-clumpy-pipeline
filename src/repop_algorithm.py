@@ -598,7 +598,7 @@ class RepopAlgorithm:
 
     def _make_halo_names(self, n_halos):
         """
-        Generate canonical halo names after filtering and sorting.
+        Generate canonical halo names after filtering, preserving row order.
         """
         return np.array(
             [f"hydro_res_{i + 1:05d}" for i in range(n_halos)],
@@ -763,7 +763,6 @@ class RepopAlgorithm:
         data_dset.attrs["column_names"] = column_names
         data_dset.attrs["units"] = units
         data_dset.attrs["iteration"] = int(iter_idx)
-        data_dset.attrs["sorted_by"] = "Js descending"
         data_dset.attrs["filtered"] = (
             "Removed engulfs_Earth=True and survives_Roche=False halos"
         )
@@ -785,8 +784,8 @@ class RepopAlgorithm:
         - builds one table per iteration instead of one HDF5 dataset per field;
         - removes Earth-engulfing halos;
         - removes Roche-failed halos;
-        - sorts the saved clean catalog by Js in decreasing order;
-        - generates halo names after sorting.
+        - preserves the natural surviving row order;
+        - assigns halo names afterward.
         """
         self.logging_info("Enter loop of iterations.")
 
