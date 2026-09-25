@@ -147,7 +147,7 @@ The map uses:
 ```text
 PIXTYPE  = HEALPIX
 ORDERING = NESTED
-NSIDE    = 1024
+NSIDE    = <NSIDE> (2048 by default)
 COORDSYS = G
 INDXSCHM = EXPLICIT
 ```
