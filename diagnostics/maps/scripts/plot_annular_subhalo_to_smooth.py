@@ -226,9 +226,11 @@ def make_figure(grouped, repop_id):
         axis.grid(False, which="both")
         axis.tick_params(direction="in", which="both", top=True, right=True)
 
-    axes[0].set_ylabel("Annular subhalo-to-smooth J-factor ratio")
+    axes[0].set_ylabel(
+        r"$\mathcal{R}=\frac{\sum J_{\mathrm{sub}}}{\sum J_{\mathrm{smooth}}}$"
+    )
     figure.supxlabel(
-        r"Angular distance from the Galactic centre, $\psi_{\rm GC}$ [deg]",
+        r"Angular separation from the Galactic Centre, $\psi_{\rm GC}$ [deg]",
         fontsize=14,
     )
     figure.suptitle(f"Repopulation {repop_id:04d}", fontsize=14)
