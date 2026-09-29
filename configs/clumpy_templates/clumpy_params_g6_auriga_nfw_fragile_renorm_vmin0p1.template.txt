@@ -14,7 +14,8 @@
 # - Substructure inside listed external halos is disabled:
 #   gDSPH/GALAXY/CLUSTER_SUBS_MASSFRACTION = 0.
 # - External halos are read from gLIST_HALOES.
-# - Full-sky HEALPix map: NSIDE = 1024, FOV = 360 deg x 180 deg.
+# - Full-sky HEALPix map: NSIDE is selected at generation time by
+#   generate_clumpy_params.py; FOV = 360 deg x 180 deg.
 #
 # Deterministic renormalization used:
 #   script: scripts/renormalize_mw_profile.py
@@ -48,8 +49,9 @@
 #   gMW_RHOSOL new = 0.3949787768 GeV/cm^3
 #
 # NOTE:
-#   This is a template. For production runs, another script may overwrite
-#   gLIST_HALOES and gSIM_OUTPUT_DIR for each realization/run stage.
+#   This is a template. For production runs, generate_clumpy_params.py replaces
+#   gLIST_HALOES, gSIM_HEALPIX_NSIDE, and gSIM_OUTPUT_DIR for each
+#   realization/run stage.
 #
 
 # Variable name                         Unit           Value             (Format)          (Comment)
@@ -99,7 +101,7 @@ gMW_SUBS_N_INM1M2                       [-]            0                 <intege
 #------------------------------------------------------------------------------
 # External lists with specified objects to add to simulations
 #------------------------------------------------------------------------------
-gLIST_HALOES                            [-]            /home/jujuba/Desktop/Auriga/CLUMPY_scripts/subhalo_lists_raw/load_custom_nopointlike_fragile_V05.txt  <string or -1>    List of external halos definitions
+gLIST_HALOES                            [-]            SET_BY_GENERATOR  <string or -1>    List of external halos definitions
 
 #------------------------------------------------------------------------------
 # Universal sub-clustering properties for CLUMPY-defined external haloes,
@@ -168,7 +170,7 @@ gSIM_FLUX_EMAX_GEV                      [GeV]          99                <float>
 gSIM_FLUX_FLAG_NUFLAVOUR                [-]            kNUMU             <string>          Considered neutrino flavour
 gSIM_GAUSSBEAM_GAMMA_FWHM_DEG           [deg]          -1                <float or -1>     FWHM of Gaussian beam of gamma-ray telescope
 gSIM_GAUSSBEAM_NEUTRINO_FWHM_DEG        [deg]          -1                <float or -1>     FWHM of Gaussian beam of neutrino telescope
-gSIM_HEALPIX_NSIDE                      [-]            1024              <integer or -1>   Resolution parameter for HEALPix
+gSIM_HEALPIX_NSIDE                      [-]            2048              <integer or -1>   Generator-controlled; overwritten with the requested runtime NSIDE
 gSIM_ALPHAINT_DEG                       [deg]          -1              <float>           Spatial J-factor integration angle
 gSIM_IS_ASTRO_OR_PP_UNITS               [-]            0                 <boolean (0/1)>   Output units [Msol]&[kpc] (1) or [GeV]&[cm] (0)
 gSIM_PSI_OBS_DEG                        [deg]          0                 <float>           Galactic long. coordinate of FOV center
@@ -178,4 +180,4 @@ gSIM_THETA_SIZE_DEG                     [deg]          180               <float>
 gSIM_EPS                                [-]            0.01              <float>           Numeric precision of the simulation
 gSIM_IS_WRITE_GALPOWERSPECTRUM          [-]            0                 <boolean (0/1)>   Write angular power spectrum of DM skymap
 gSIM_IS_WRITE_ROOTFILES                 [-]            0                 <boolean (0/1)>   Write output additionally in ROOT format
-gSIM_OUTPUT_DIR                         [-]            /home/jujuba/Desktop/Auriga/CLUMPY_scripts/clumpy_outputs/raw/no_poinlike_fragile_V05   <string or -1>    Output directory (absolute or relative)
+gSIM_OUTPUT_DIR                         [-]            SET_BY_GENERATOR  <string or -1>    Output directory (absolute or relative)

@@ -35,6 +35,7 @@ and generates:
 It replaces, inside the template:
 
     gLIST_HALOES
+    gSIM_HEALPIX_NSIDE
     gSIM_OUTPUT_DIR
 
 The physical MW normalization gMW_RHOSOL is already fixed in the
