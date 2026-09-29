@@ -94,7 +94,7 @@ extended:  theta_s >= 0.03 deg
 pointlike: theta_s <  0.03 deg
 ```
 
-Both components are generated during the same chunked pass through the HDF5 catalog. 
+Catalogue preparation uses one chunked pass through the HDF5 catalog when cuts are disabled and two chunked passes when either the pointlike or extended cut is enabled.
 
 ### Extended component
 
@@ -380,10 +380,10 @@ The extended/pointlike split is derived from the chosen `NSIDE`: `theta_pix_deg 
 Optional cuts can be enabled, for example:
 
 ```bash
-EXTENDED_CUT_F=1e-3 POINTLIKE_CUT_F=1e-3 THETA_APERTURE_DEG=0.03 bash scripts/run_clumpy_one_case.sh 230 resilient
+EXTENDED_CUT_F=1e-3 POINTLIKE_CUT_F=1e-3 bash scripts/run_clumpy_one_case.sh 230 resilient
 ```
 
-The cut logic uses the same proxies as the diagnostics: pointlike uses `Js`, extended uses `J_theta(theta_aperture)`, and `Jref = max(max Js pointlike, max J_theta extended)`.
+The cut logic uses the same proxies as the diagnostics: pointlike uses `Js`, extended uses `J_theta` with aperture `hp.max_pixrad(NSIDE)`, and `Jref = max(max Js pointlike, max J_theta extended)`.
 
 If no cut variables are set, no subhalo cuts are applied.
 
