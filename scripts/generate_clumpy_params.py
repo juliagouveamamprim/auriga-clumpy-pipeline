@@ -9,13 +9,13 @@ Usage
 
 Raw CLUMPY run:
 
-    python3 generate_clumpy_params.py 1 fragile raw
-    python3 generate_clumpy_params.py 1 resilient raw
+    python3 scripts/generate_clumpy_params.py 1 fragile raw
+    python3 scripts/generate_clumpy_params.py 1 resilient raw
 
 Corrected CLUMPY run:
 
-    python3 generate_clumpy_params.py 1 fragile corrected
-    python3 generate_clumpy_params.py 1 resilient corrected
+    python3 scripts/generate_clumpy_params.py 1 fragile corrected
+    python3 scripts/generate_clumpy_params.py 1 resilient corrected
 
 This script reads the renormalized template:
 

@@ -7,8 +7,8 @@ Correct CLUMPY halo-list rhos values using the J actually rendered by CLUMPY.
 Usage
 -----
 
-    python3 correct_rhos_from_clumpy_raw.py 1 fragile
-    python3 correct_rhos_from_clumpy_raw.py 1 resilient
+    python3 scripts/correct_rhos_from_clumpy_raw.py 1 fragile
+    python3 scripts/correct_rhos_from_clumpy_raw.py 1 resilient
 
 This script reads:
 

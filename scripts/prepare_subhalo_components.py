@@ -2,14 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """
-Split an Auriga full-repopulation HDF5 catalog into extended and
-pointlike components in a single chunked pass.
+Split an Auriga full-repopulation HDF5 catalog into extended and pointlike
+components in one chunked pass when cuts are disabled and two chunked passes
+when either the pointlike or extended cut is enabled.
 
 Usage
 -----
 
-    python3 prepare_subhalo_components.py 1 resilient
-    python3 prepare_subhalo_components.py 1 fragile
+    python3 scripts/prepare_subhalo_components.py 1 resilient
+    python3 scripts/prepare_subhalo_components.py 1 fragile
 
 This reads:
 

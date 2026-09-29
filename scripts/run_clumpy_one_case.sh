@@ -7,12 +7,12 @@ set -euo pipefail
 #
 # Usage:
 #
-#   bash run_clumpy_one_case.sh <repop_id> <scenario>
+#   bash scripts/run_clumpy_one_case.sh <repop_id> <scenario>
 #
 # Examples:
 #
-#   bash run_clumpy_one_case.sh 1 resilient
-#   bash run_clumpy_one_case.sh 1 fragile
+#   bash scripts/run_clumpy_one_case.sh 1 resilient
+#   bash scripts/run_clumpy_one_case.sh 1 fragile
 #
 # Pipeline:
 #
