@@ -387,6 +387,17 @@ The cut logic uses the same proxies as the diagnostics: pointlike uses `Js`, ext
 
 If no cut variables are set, no subhalo cuts are applied.
 
+An existing pointlike FITS is reused by default when its HEALPix structure,
+scenario, repopulation ID, angular threshold, and pointlike-cut metadata match
+the current run. When `POINTLIKE_CUT_F` is enabled, the stored `JREF` must also
+match the reference recomputed from the current HDF5 catalogue. The extended
+raw list is regenerated regardless. Set `FORCE_POINTLIKE=1` to regenerate the
+pointlike FITS explicitly:
+
+```bash
+FORCE_POINTLIKE=1 bash scripts/run_clumpy_one_case.sh 230 resilient
+```
+
 ### Run one complete case
 
 ```bash
