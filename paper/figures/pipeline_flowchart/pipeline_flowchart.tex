@@ -3,7 +3,7 @@
 \usepackage[T1]{fontenc}
 \usepackage{amsmath}
 \usepackage{newtxtext,newtxmath}
-\usetikzlibrary{arrows.meta,backgrounds,calc,positioning}
+\usetikzlibrary{arrows.meta,backgrounds,calc,decorations.pathreplacing,positioning}
 
 \definecolor{extendedcolor}{HTML}{EE3377}
 \definecolor{pointcolor}{HTML}{009988}
@@ -71,6 +71,17 @@
     minimum width=5.25cm,
     text width=4.95cm
   },
+  iolabel/.style={
+    text=muted,
+    font=\sffamily\bfseries\scriptsize,
+    inner sep=0pt
+  },
+  iobrace/.style={
+    decorate,
+    decoration={brace,amplitude=3.5pt},
+    draw=muted,
+    line width=0.65pt
+  },
   flow/.style={
     -{Latex[length=2.2mm,width=1.6mm]},
     draw=linegray,
@@ -127,7 +138,17 @@
     {Smooth MW +\\extended subhalos\\HEALPix map};
 
   \node[final] (finalmap) at (3.05,-3.08)
-    {Final \(J\)-factor\\template in FITS\\format};
+    {Final \(J\)-factor\\template};
+
+  \draw[iobrace,decoration={brace,mirror,amplitude=3.5pt}]
+    ([xshift=0.10cm,yshift=-0.08cm]catalogues.south west) --
+    ([xshift=-0.10cm,yshift=-0.08cm]catalogues.south east)
+    node[midway,below=5pt,iolabel] {INPUT - HDF5};
+
+  \draw[iobrace]
+    ([xshift=0.10cm,yshift=0.08cm]finalmap.north west) --
+    ([xshift=-0.10cm,yshift=0.08cm]finalmap.north east)
+    node[midway,above=5pt,iolabel] {OUTPUT - FITS};
 
   \coordinate (merge) at (5.10,-3.08);
 
