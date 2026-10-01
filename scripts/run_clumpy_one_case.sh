@@ -68,9 +68,15 @@ NSIDE="${NSIDE:-${DEFAULT_NSIDE}}"
 
 EXTENDED_CUT_F="${EXTENDED_CUT_F:-}"
 POINTLIKE_CUT_F="${POINTLIKE_CUT_F:-}"
+FORCE_POINTLIKE="${FORCE_POINTLIKE:-0}"
 
 if ! [[ "${NSIDE}" =~ ^[0-9]+$ ]] || (( NSIDE < 1 || (NSIDE & (NSIDE - 1)) != 0 )); then
     echo "ERROR: NSIDE must be a positive power of two."
+    exit 1
+fi
+
+if [ "${FORCE_POINTLIKE}" != "0" ] && [ "${FORCE_POINTLIKE}" != "1" ]; then
+    echo "ERROR: FORCE_POINTLIKE must be 0 or 1."
     exit 1
 fi
 
@@ -118,6 +124,7 @@ echo "Run tag:   ${REPOP_RUN_TAG}"
 echo "Cuts:"
 echo "  EXTENDED_CUT_F:      ${EXTENDED_CUT_F:-none}"
 echo "  POINTLIKE_CUT_F:     ${POINTLIKE_CUT_F:-none}"
+echo "  FORCE_POINTLIKE:     ${FORCE_POINTLIKE}"
 echo "  Extended aperture:   hp.max_pixrad(NSIDE), derived automatically"
 echo "Time:      $(date)"
 echo "======================================================================"
@@ -152,6 +159,10 @@ fi
 
 if [ -n "${POINTLIKE_CUT_F}" ]; then
     PREPARE_ARGS+=("--pointlike-cut-f" "${POINTLIKE_CUT_F}")
+fi
+
+if [ "${FORCE_POINTLIKE}" = "1" ]; then
+    PREPARE_ARGS+=("--force-pointlike")
 fi
 
 "${PYTHON}" "${SCRIPTS_DIR}/prepare_subhalo_components.py" "${PREPARE_ARGS[@]}"

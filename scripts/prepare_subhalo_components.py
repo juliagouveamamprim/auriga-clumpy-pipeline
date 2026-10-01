@@ -55,12 +55,14 @@ Operational choices:
 
 import argparse
 import math
+import warnings
 from pathlib import Path
 
 import h5py
 import healpy as hp
 import numpy as np
 from astropy.io import fits
+from astropy.io.fits.verify import VerifyError, VerifyWarning
 
 
 # ============================================================
@@ -164,6 +166,15 @@ def parse_args():
         help=(
             "Deprecated. The extended central-pixel proxy now uses the "
             "CLUMPY aperture hp.max_pixrad(NSIDE), derived automatically."
+        ),
+    )
+
+    parser.add_argument(
+        "--force-pointlike",
+        action="store_true",
+        help=(
+            "Regenerate the pointlike FITS even when an existing file "
+            "passes validation. The extended raw list is always regenerated."
         ),
     )
 
@@ -576,6 +587,185 @@ def write_pointlike_fits(
     ).writeto(output_path, overwrite=True)
 
 
+def validate_existing_pointlike_fits(
+    path,
+    nside,
+    scenario,
+    repop_id,
+    theta_cut_deg,
+    pointlike_cut_f=None,
+    j_pixel_ref=None,
+):
+    """Return whether an existing pointlike FITS can be safely reused.
+
+    This performs structural and provenance checks without scanning the full
+    maps. When the pointlike catalogue cut is enabled, ``j_pixel_ref`` must be
+    the value freshly computed from the current source catalogue.
+    """
+
+    path = Path(path)
+
+    if not path.is_file():
+        return False, "file does not exist"
+
+    if path.stat().st_size == 0:
+        return False, "file is empty"
+
+    expected_npix = hp.nside2npix(nside)
+    expected_pixel_area = hp.nside2pixarea(nside)
+
+    def matching_float(actual, expected, *, rtol=1e-12):
+        try:
+            actual = float(actual)
+            expected = float(expected)
+        except (TypeError, ValueError):
+            return False
+
+        return bool(
+            np.isfinite(actual)
+            and np.isfinite(expected)
+            and np.isclose(actual, expected, rtol=rtol, atol=0.0)
+        )
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", VerifyWarning)
+            hdul_context = fits.open(
+                path,
+                mode="readonly",
+                memmap=True,
+                lazy_load_hdus=False,
+            )
+
+        with hdul_context as hdul:
+            hdul.verify("exception")
+
+            if len(hdul) < 3:
+                return False, f"expected at least 3 HDUs, found {len(hdul)}"
+
+            if hdul[0].header.get("CONTENT") != (
+                "Auriga pointlike subhalo J-factor map"
+            ):
+                return False, "unexpected primary CONTENT metadata"
+
+            expected_hdus = (
+                (1, "JFACTOR", ["PIXEL", "Jpointlike"]),
+                (2, "JFACTOR_PER_SR", ["PIXEL", "Jpointlike_per_sr"]),
+            )
+
+            for index, expected_name, expected_columns in expected_hdus:
+                hdu = hdul[index]
+                label = f"HDU {index} ({expected_name})"
+
+                if hdu.name != expected_name:
+                    return False, (
+                        f"{label}: found extension name {hdu.name!r}"
+                    )
+
+                if hdu.columns.names != expected_columns:
+                    return False, (
+                        f"{label}: expected columns {expected_columns}, "
+                        f"found {hdu.columns.names}"
+                    )
+
+                if hdu.header.get("NAXIS2") != expected_npix:
+                    return False, (
+                        f"{label}: expected {expected_npix} rows, "
+                        f"found {hdu.header.get('NAXIS2')!r}"
+                    )
+
+                expected_metadata = {
+                    "PIXTYPE": "HEALPIX",
+                    "ORDERING": "NESTED",
+                    "NSIDE": nside,
+                    "FIRSTPIX": 0,
+                    "LASTPIX": expected_npix - 1,
+                    "INDXSCHM": "EXPLICIT",
+                    "COORDSYS": "G",
+                    "SCENARIO": scenario,
+                    "REPOPID": repop_id,
+                }
+
+                for key, expected in expected_metadata.items():
+                    actual = hdu.header.get(key)
+                    if actual != expected:
+                        return False, (
+                            f"{label}: expected {key}={expected!r}, "
+                            f"found {actual!r}"
+                        )
+
+                if not matching_float(
+                    hdu.header.get("THETACUT"),
+                    theta_cut_deg,
+                ):
+                    return False, f"{label}: THETACUT does not match"
+
+                if not matching_float(
+                    hdu.header.get("PIXAREA"),
+                    expected_pixel_area,
+                ):
+                    return False, f"{label}: PIXAREA does not match"
+
+                n_pointlike = hdu.header.get("NPOINT")
+                n_pointlike_total = hdu.header.get("NPTOTAL")
+                if (
+                    not isinstance(n_pointlike, (int, np.integer))
+                    or n_pointlike < 0
+                    or not isinstance(n_pointlike_total, (int, np.integer))
+                    or n_pointlike_total < n_pointlike
+                ):
+                    return False, f"{label}: invalid pointlike counts"
+
+                if hdu.data is None:
+                    return False, f"{label}: table data is missing"
+
+                if (
+                    int(hdu.data["PIXEL"][0]) != 0
+                    or int(hdu.data["PIXEL"][-1]) != expected_npix - 1
+                ):
+                    return False, f"{label}: PIXEL endpoints do not match"
+
+                if pointlike_cut_f is None:
+                    if "FPL" in hdu.header or "JCPL" in hdu.header:
+                        return False, (
+                            f"{label}: unexpected pointlike cut metadata"
+                        )
+                else:
+                    if j_pixel_ref is None:
+                        return False, "current JREF was not provided"
+
+                    if not matching_float(
+                        hdu.header.get("FPL"),
+                        pointlike_cut_f,
+                    ):
+                        return False, f"{label}: FPL does not match"
+
+                    if not matching_float(
+                        hdu.header.get("JREF"),
+                        j_pixel_ref,
+                    ):
+                        return False, f"{label}: JREF does not match"
+
+                    expected_j_cut = pointlike_cut_f * j_pixel_ref
+                    if not matching_float(
+                        hdu.header.get("JCPL"),
+                        expected_j_cut,
+                    ):
+                        return False, f"{label}: JCPL does not match"
+
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        IndexError,
+        TypeError,
+        VerifyError,
+        VerifyWarning,
+    ) as error:
+        return False, f"could not validate FITS: {error}"
+
+    return True, "existing pointlike FITS is valid"
+
 
 def projected_nfw_fraction(y):
     """
@@ -848,6 +1038,7 @@ def prepare_subhalo_components(
     extended_cut_f=None,
     pointlike_cut_f=None,
     theta_aperture_deg=None,
+    force_pointlike=False,
 ):
     """
     Build the extended CLUMPY list and pointlike HEALPix map.
@@ -901,11 +1092,6 @@ def prepare_subhalo_components(
     theta_aperture_deg = alpha_int_deg
 
     group_name = f"iteration_{iteration}"
-
-    pointlike_map = np.zeros(
-        hp.nside2npix(nside),
-        dtype=np.float64,
-    )
 
     total_seen = 0
     total_valid = 0
@@ -1014,6 +1200,7 @@ def prepare_subhalo_components(
         cut_metadata = None
         extended_j_cut = None
         pointlike_j_cut = None
+        j_pixel_ref = None
 
         if cuts_enabled:
             print("Subhalo cuts: enabled")
@@ -1060,6 +1247,32 @@ def prepare_subhalo_components(
             print(f"Pointlike J cut:           {pointlike_j_cut}")
         else:
             print("Subhalo cuts: disabled")
+
+        if force_pointlike:
+            reuse_pointlike = False
+            reuse_reason = "forced regeneration requested"
+        else:
+            reuse_pointlike, reuse_reason = validate_existing_pointlike_fits(
+                path=output_pointlike_fits,
+                nside=nside,
+                scenario=scenario,
+                repop_id=repop_id,
+                theta_cut_deg=theta_min_deg,
+                pointlike_cut_f=pointlike_cut_f,
+                j_pixel_ref=j_pixel_ref,
+            )
+
+        generate_pointlike = not reuse_pointlike
+
+        if generate_pointlike:
+            pointlike_map = np.zeros(
+                hp.nside2npix(nside),
+                dtype=np.float64,
+            )
+            print(f"Pointlike FITS will be generated: {reuse_reason}")
+        else:
+            pointlike_map = None
+            print(f"Reusing pointlike FITS: {output_pointlike_fits}")
 
         print("=" * 80)
         print()
@@ -1158,29 +1371,30 @@ def prepare_subhalo_components(
                 if n_pointlike_kept_chunk:
                     js_pointlike = js[mask_pointlike_kept]
 
-                    lon_deg, lat_deg = xyz_to_lb_deg(
-                        x_e[mask_pointlike_kept],
-                        y_e[mask_pointlike_kept],
-                        z_e[mask_pointlike_kept],
-                    )
-
-                    pixel = hp.ang2pix(
-                        nside,
-                        lon_deg,
-                        lat_deg,
-                        lonlat=True,
-                        nest=True,
-                    )
-
-                    pointlike_map += np.bincount(
-                        pixel,
-                        weights=js_pointlike,
-                        minlength=pointlike_map.size,
-                    )
-
                     total_pointlike_kept_js += js_pointlike.sum(
                         dtype=np.float64
                     )
+
+                    if generate_pointlike:
+                        lon_deg, lat_deg = xyz_to_lb_deg(
+                            x_e[mask_pointlike_kept],
+                            y_e[mask_pointlike_kept],
+                            z_e[mask_pointlike_kept],
+                        )
+
+                        pixel = hp.ang2pix(
+                            nside,
+                            lon_deg,
+                            lat_deg,
+                            lonlat=True,
+                            nest=True,
+                        )
+
+                        pointlike_map += np.bincount(
+                            pixel,
+                            weights=js_pointlike,
+                            minlength=pointlike_map.size,
+                        )
 
                 mask_extended_to_write = mask_extended_kept
 
@@ -1225,31 +1439,34 @@ def prepare_subhalo_components(
                     flush=True,
                 )
 
-    map_sum = pointlike_map.sum(dtype=np.float64)
+    if generate_pointlike:
+        map_sum = pointlike_map.sum(dtype=np.float64)
 
-    if not np.isclose(
-        map_sum,
-        total_pointlike_kept_js,
-        rtol=1e-12,
-        atol=0.0,
-    ):
-        raise RuntimeError(
-            "Pointlike J-factor conservation failed: "
-            f"sum(map)={map_sum:.16e}, "
-            f"sum(catalog kept)={total_pointlike_kept_js:.16e}"
+        if not np.isclose(
+            map_sum,
+            total_pointlike_kept_js,
+            rtol=1e-12,
+            atol=0.0,
+        ):
+            raise RuntimeError(
+                "Pointlike J-factor conservation failed: "
+                f"sum(map)={map_sum:.16e}, "
+                f"sum(catalog kept)={total_pointlike_kept_js:.16e}"
+            )
+
+        write_pointlike_fits(
+            output_path=output_pointlike_fits,
+            pointlike_map=pointlike_map,
+            nside=nside,
+            scenario=scenario,
+            repop_id=repop_id,
+            theta_cut_deg=theta_min_deg,
+            n_pointlike=total_pointlike_kept,
+            n_pointlike_total=total_pointlike,
+            cut_metadata=cut_metadata,
         )
-
-    write_pointlike_fits(
-        output_path=output_pointlike_fits,
-        pointlike_map=pointlike_map,
-        nside=nside,
-        scenario=scenario,
-        repop_id=repop_id,
-        theta_cut_deg=theta_min_deg,
-        n_pointlike=total_pointlike_kept,
-        n_pointlike_total=total_pointlike,
-        cut_metadata=cut_metadata,
-    )
+    else:
+        map_sum = None
 
     print()
     print("=" * 80)
@@ -1268,7 +1485,10 @@ def prepare_subhalo_components(
     print(f"Pointlike halos kept by cut: {total_pointlike_kept:,}")
     print(f"Pointlike catalog sum(Js), all:  {total_pointlike_js:.16e}")
     print(f"Pointlike catalog sum(Js), kept: {total_pointlike_kept_js:.16e}")
-    print(f"Pointlike map sum:              {map_sum:.16e}")
+    if map_sum is None:
+        print("Pointlike map: reused without rewriting")
+    else:
+        print(f"Pointlike map sum:              {map_sum:.16e}")
     print(f"TOP_N for extended list: {top_n}")
     print("=" * 80)
 
@@ -1314,6 +1534,7 @@ def main():
         extended_cut_f=args.extended_cut_f,
         pointlike_cut_f=args.pointlike_cut_f,
         theta_aperture_deg=args.theta_aperture_deg,
+        force_pointlike=args.force_pointlike,
     )
 
 

@@ -19,6 +19,7 @@ Environment variables:
   NSIDE                 HEALPix NSIDE inherited by one-case runs (default: 2048)
   EXTENDED_CUT_F        Extended cut factor inherited by one-case runs (default: none)
   POINTLIKE_CUT_F       Pointlike cut factor inherited by one-case runs (default: none)
+  FORCE_POINTLIKE       Regenerate valid pointlike FITS files (0 or 1; default: 0)
   CLUMPY_EXECUTABLE     CLUMPY executable or wrapper inherited by one-case runs
   PYTHON_EXECUTABLE     Python executable inherited by one-case runs
 
@@ -46,8 +47,9 @@ DEFAULT_NSIDE=2048
 NSIDE="${NSIDE:-${DEFAULT_NSIDE}}"
 EXTENDED_CUT_F="${EXTENDED_CUT_F:-}"
 POINTLIKE_CUT_F="${POINTLIKE_CUT_F:-}"
+FORCE_POINTLIKE="${FORCE_POINTLIKE:-0}"
 
-export NSIDE EXTENDED_CUT_F POINTLIKE_CUT_F
+export NSIDE EXTENDED_CUT_F POINTLIKE_CUT_F FORCE_POINTLIKE
 
 for value_name in START_ID END_ID MAX_JOBS POLL_SECONDS LAUNCH_DELAY_SECONDS; do
     value="${!value_name}"
@@ -69,6 +71,11 @@ fi
 
 if ! [[ "${NSIDE}" =~ ^[0-9]+$ ]] || (( NSIDE < 1 || (NSIDE & (NSIDE - 1)) != 0 )); then
     echo "ERROR: NSIDE must be a positive power of two." >&2
+    exit 2
+fi
+
+if [[ "${FORCE_POINTLIKE}" != "0" && "${FORCE_POINTLIKE}" != "1" ]]; then
+    echo "ERROR: FORCE_POINTLIKE must be 0 or 1." >&2
     exit 2
 fi
 
@@ -119,6 +126,7 @@ echo "NSIDE:            ${NSIDE}"
 echo "Cuts:"
 echo "  EXTENDED_CUT_F:      ${EXTENDED_CUT_F:-none}"
 echo "  POINTLIKE_CUT_F:     ${POINTLIKE_CUT_F:-none}"
+echo "  FORCE_POINTLIKE:     ${FORCE_POINTLIKE}"
 echo "  Extended aperture:   hp.max_pixrad(NSIDE), derived automatically"
 echo "One-case script:  ${ONE_CASE_SCRIPT}"
 echo "Batch log dir:    ${BATCH_LOG_DIR}"
