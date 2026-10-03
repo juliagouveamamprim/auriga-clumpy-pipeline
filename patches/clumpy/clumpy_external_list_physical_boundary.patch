@@ -1,0 +1,15 @@
+diff --git a/src/janalysis.cc b/src/janalysis.cc
+--- a/src/janalysis.cc
++++ b/src/janalysis.cc
+@@ -3102,8 +3102,9 @@ void gal_j2D(double &psi, string const &theta_deg_str,
+             gOAI_HALO_LOG_NPIX = 0;
+             gOAI_HALO_LOG_ACTIVE = true;
+ 
+-            // Add all pixels shining above Jcontinuum in the map
+-            add_halo_in_map(par_list_tot, gSIM_EPS_DRAWN, j_list_tot, jgal_continuum, rs_pix_fov,
++            // External-list halos are rendered to their supplied physical boundary.
++            // Do not use the smooth-MW background for the drawing-radius stop.
++            add_halo_in_map(par_list_tot, gSIM_EPS_DRAWN, j_list_tot, 0., rs_pix_fov,
+                             is_subs_list, list_halos[i].Mtot, list_halos[i].Subs_mfrac, par_list_dpdv,
+                             par_list_subs, nsub_tot);
+ 

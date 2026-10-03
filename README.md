@@ -333,7 +333,8 @@ The complete workflow also requires:
 - Bash;
 - `/usr/bin/time`;
 - a functional CLUMPY installation;
-- the CLUMPY patch that produces `*.halo_rendered.log`.
+- the two versioned CLUMPY patches documented in
+  [`patches/clumpy/README.md`](patches/clumpy/README.md).
 
 CLUMPY is an external dependency and is not distributed with this repository.
 
@@ -365,7 +366,21 @@ export CLUMPY_EXECUTABLE=/path/to/clumpy_wrapper
 
 If this variable is not set, the wrapper searches for `clumpy` in the current `PATH`.
 
-The executable must produce the patched halo-rendered log.
+The executable must be built with both patches under `patches/clumpy/`, in the
+documented order, and must produce the patched halo-rendered log. See
+[`patches/clumpy/README.md`](patches/clumpy/README.md) for the pinned CLUMPY
+commit, patch checks, application commands, and build instructions.
+
+Before any RAW or CORRECTED CLUMPY launch, the one-case wrapper validates and
+exports `CLUMPY_DATA`. An explicitly supplied valid value is respected.
+Otherwise, the wrapper infers `<root>/data` when the resolved executable is
+`<root>/bin/clumpy` or `<root>/build/cli/clumpy`. It fails before launching
+CLUMPY if the data directory cannot be resolved or validated.
+
+Extended RAW, CORRECTED, and total products made with the previous renderer are
+not equivalent to products made with the external-list physical-boundary
+patch and must not be treated as completed patched runs. Pointlike FITS files
+remain reusable when their existing structure and provenance validation passes.
 
 ### NSIDE and optional subhalo cuts
 

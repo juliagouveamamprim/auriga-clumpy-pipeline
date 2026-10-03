@@ -94,6 +94,43 @@ if ! command -v "$CLUMPY" >/dev/null 2>&1; then
     exit 1
 fi
 
+CLUMPY_RESOLVED="$(command -v -- "$CLUMPY")"
+CLUMPY_RESOLVED="$(readlink -f -- "$CLUMPY_RESOLVED")"
+
+if [ -z "${CLUMPY_DATA:-}" ]; then
+    case "$CLUMPY_RESOLVED" in
+        */bin/clumpy)
+            CLUMPY_DATA="${CLUMPY_RESOLVED%/bin/clumpy}/data"
+            ;;
+        */build/cli/clumpy)
+            CLUMPY_DATA="${CLUMPY_RESOLVED%/build/cli/clumpy}/data"
+            ;;
+        *)
+            echo "ERROR: CLUMPY_DATA is not set and could not be inferred from:" >&2
+            echo "  $CLUMPY_RESOLVED" >&2
+            echo >&2
+            echo "Set CLUMPY_DATA to the CLUMPY data directory." >&2
+            exit 1
+            ;;
+    esac
+fi
+
+if [ ! -d "$CLUMPY_DATA" ] \
+    || [ ! -f "$CLUMPY_DATA/list_generic.txt" ] \
+    || [ ! -d "$CLUMPY_DATA/healpix" ]; then
+    echo "ERROR: CLUMPY_DATA is not a valid CLUMPY data directory:" >&2
+    echo "  $CLUMPY_DATA" >&2
+    echo >&2
+    echo "Expected at least:" >&2
+    echo "  $CLUMPY_DATA/list_generic.txt" >&2
+    echo "  $CLUMPY_DATA/healpix/" >&2
+    exit 1
+fi
+
+CLUMPY_DATA="$(cd -- "$CLUMPY_DATA" && pwd -P)"
+export CLUMPY_DATA
+CLUMPY="$CLUMPY_RESOLVED"
+
 CASE_DIR="${BASE_RUN_DIR}/${SCENARIO}"
 
 RAW_PARAM="${CASE_DIR}/params/generated/${REPOP_TAG}_raw_params${NSIDE_SUFFIX}.txt"
@@ -121,6 +158,8 @@ echo "REPOP_TAG: ${REPOP_TAG}"
 echo "SCENARIO:  ${SCENARIO}"
 echo "NSIDE:     ${NSIDE}"
 echo "Run tag:   ${REPOP_RUN_TAG}"
+echo "CLUMPY:    ${CLUMPY}"
+echo "CLUMPY_DATA: ${CLUMPY_DATA}"
 echo "Cuts:"
 echo "  EXTENDED_CUT_F:      ${EXTENDED_CUT_F:-none}"
 echo "  POINTLIKE_CUT_F:     ${POINTLIKE_CUT_F:-none}"

@@ -1,0 +1,172 @@
+diff --git a/src/healpix_fits.cc b/src/healpix_fits.cc
+index a56fb14..fdd2715 100644
+--- a/src/healpix_fits.cc
++++ b/src/healpix_fits.cc
+@@ -37,6 +37,18 @@ using namespace std;
+ 
+ #include "unistd.h"
+ 
++// -----------------------------------------------------------------------------
++// OpenAI debug helpers: accumulate the J actually deposited in the map for the
++// CURRENT halo from a user-provided list, without mixing overlaps between halos.
++// These globals are only active when janalysis.cc explicitly enables them
++// around the add_halo_in_map() call for list halos.
++// -----------------------------------------------------------------------------
++long   gOAI_HALO_LOG_CURRENT_ID = -1;
++double gOAI_HALO_LOG_J_RENDERED = 0.0;
++long   gOAI_HALO_LOG_NPIX       = 0;
++bool   gOAI_HALO_LOG_ACTIVE     = false;
++
++
+ //______________________________________________________________________________
+ void add_halo_in_map(double par_tot[11], double const &eps, vector<double> &j_map, double const j_bkd,
+                      rangeset<int> &rs_pix_fov, bool is_subs, double const &mtot,
+@@ -306,27 +318,51 @@ void add_halo_in_map(double par_tot[11], double const &eps, vector<double> &j_ma
+ 
+    // find all pixels in disk with radius clump_outshine_radius around the clump center ptg_cl:
+    hp_gridprop.query_disc(ptg_cl, clump_outshine_radius, rs_pix_clump);
+-
++   
+    // intersect clump pixels with FOV pixels:
+-   rs_pix_clump = rs_pix_clump.op_and(rs_pix_fov) ;
++   rs_pix_clump = rs_pix_clump.op_and(rs_pix_fov);
++
++   // CLUMPY later rescales J integrated in the circular alpha_int aperture
++   // to the HEALPix pixel area, and then converts from astrophysical to
++   // particle-physics units before writing the final JFACTOR map.
++   // Reproduce that same pipeline for the per-halo debug log, while leaving
++   // the original map deposition untouched.
++   const double int_area = 2.0 * PI * (1.0 - cos(gSIM_ALPHAINT));
++   const double jrescalefac =
++      (int_area > 0.0) ? (gSIM_HEALPIX_DELTAOMEGA / int_area) : 1.0;
+ 
+    vector<int> v_pix_clump;
+-   rs_pix_clump.toVector(v_pix_clump) ;
+-   int index_j_map ;
+-   pointing ptg_i_pix ;
+-   // draw the clump!
+-   //cout << "Number of pix in cluster = " << rs_pix_clump.nval()<<endl;
+-   for (int i = 0; i < rs_pix_clump.nval(); ++i) {
+-      int i_pix = v_pix_clump[i] ;
+-      vec3_pix  = hp_gridprop.pix2vec(i_pix);
++   rs_pix_clump.toVector(v_pix_clump);
++   int index_j_map;
++
++   for (int i = 0; i < rs_pix_clump.nval(); i++) {
++      int i_pix = v_pix_clump[i];
++      vec3_pix = hp_gridprop.pix2vec(i_pix);
++
++      // Phi pixel = angular distance between pixel and clump centre:
+       double phi_pix = hp_angular_dist(vec3_cl, vec3_pix);
+-      if (phi_pix >= phi_tab.back()) continue;
++
++      if (phi_pix > phi_tab.back()) continue;
+ 
+       int i1D = binary_search(phi_tab, phi_pix);
+-      // look for closest value:
+-      if (i1D < int(phi_tab.size()) and phi_pix - phi_tab[i1D] > phi_tab[i1D + 1] - phi_pix) i1D++;
++
++      // Look for closest value:
++      if (i1D < int(phi_tab.size()) - 1 &&
++          phi_pix - phi_tab[i1D] > phi_tab[i1D + 1] - phi_pix) {
++         i1D++;
++      }
++
+       index_j_map = binary_search(v_pix_fov, i_pix);
+-      j_map[index_j_map] += j_1D[i1D];
++
++      double contrib_oai = j_1D[i1D];
++      j_map[index_j_map] += contrib_oai;
++
++      if (gOAI_HALO_LOG_ACTIVE) {
++         double contrib_logged = contrib_oai * jrescalefac;
++         convert_to_PP_units(1, contrib_logged);
++         gOAI_HALO_LOG_J_RENDERED += contrib_logged;
++         gOAI_HALO_LOG_NPIX++;
++      }
+    }
+ 
+    // Free memory
+@@ -3854,4 +3890,4 @@ void j_interpolation(double *j_interp, double *var_subs_interp,
+ 
+    gSIM_ALPHAINT = alphaint_orig;
+    return;
+-}
+\ No newline at end of file
++}
+diff --git a/src/janalysis.cc b/src/janalysis.cc
+index 20973b2..035eb96 100644
+--- a/src/janalysis.cc
++++ b/src/janalysis.cc
+@@ -45,6 +45,11 @@ using namespace std;
+ #include <unistd.h>
+ #include <algorithm>
+ 
++// OpenAI halo-render log accumulators (defined in healpix_fits.cc)
++extern long   gOAI_HALO_LOG_CURRENT_ID;
++extern double gOAI_HALO_LOG_J_RENDERED;
++extern long   gOAI_HALO_LOG_NPIX;
++extern bool   gOAI_HALO_LOG_ACTIVE;
+ 
+ #define FPTR (static_cast<fitsfile *> (fptr))
+ 
+@@ -1865,6 +1870,7 @@ void gal_j2D(double &psi, string const &theta_deg_str,
+    string filename_root_str = gSIM_OUTPUT_DIR + filename_core_str + ".root";
+    string filename_list_str = gSIM_OUTPUT_DIR + filename_core_str + ".list";
+    string filename_drawn_str = gSIM_OUTPUT_DIR + filename_core_str + ".drawn";
++   string filename_halo_render_log_str = gSIM_OUTPUT_DIR + filename_core_str + ".halo_rendered.log";
+ 
+    string powspecfilename_str = gSIM_OUTPUT_DIR + "powerspec_" + filename_core_str + ".fits";
+    string popstudy_drawn_filename_str = gSIM_OUTPUT_DIR + "popstudy_drawn_" + filename_core_str + ".root";
+@@ -2956,6 +2962,17 @@ void gal_j2D(double &psi, string const &theta_deg_str,
+          fprintf(fp_list, "#\n");
+       }
+ 
++      // Initialise halo-render log (one line per halo from external list)
++      {
++         ofstream fp_halo_render_log(filename_halo_render_log_str.c_str());
++         if (fp_halo_render_log.is_open()) {
++            fp_halo_render_log << "# HALO_INDEX\tNAME\tTYPE\tJ_RENDERED\tNPIX_TOUCHED\n";
++         } else {
++            cerr << "WARNING: could not open halo render log file: "
++                 << filename_halo_render_log_str << endl;
++         }
++      }
++
+       // Loop on all objects in list
+       unsigned int counter_list_in = 0;
+       for (int i = 0; i < (int)list_halos.size(); ++i) {
+@@ -3079,10 +3096,33 @@ void gal_j2D(double &psi, string const &theta_deg_str,
+                        gSIM_SIGDIGITS, jhalo_centre, gSIM_SIGDIGITS,  j_fraction, gSIM_SIGDIGITS, list_halos[i].Mtot);
+             }
+ 
++            // Reset halo-render log accumulators for this halo
++            gOAI_HALO_LOG_CURRENT_ID = i;
++            gOAI_HALO_LOG_J_RENDERED = 0.0;
++            gOAI_HALO_LOG_NPIX = 0;
++            gOAI_HALO_LOG_ACTIVE = true;
++
+             // Add all pixels shining above Jcontinuum in the map
+             add_halo_in_map(par_list_tot, gSIM_EPS_DRAWN, j_list_tot, jgal_continuum, rs_pix_fov,
+                             is_subs_list, list_halos[i].Mtot, list_halos[i].Subs_mfrac, par_list_dpdv,
+                             par_list_subs, nsub_tot);
++
++            gOAI_HALO_LOG_ACTIVE = false;
++
++            {
++               ofstream fp_halo_render_log(filename_halo_render_log_str.c_str(), ios::app);
++               if (fp_halo_render_log.is_open()) {
++                  fp_halo_render_log
++                     << i << "\t"
++                     << list_halos[i].Name << "\t"
++                     << list_halos[i].Type << "\t"
++                     << setprecision(16) << gOAI_HALO_LOG_J_RENDERED << "\t"
++                     << gOAI_HALO_LOG_NPIX << "\n";
++               } else {
++                  cerr << "WARNING: could not append halo render log file: "
++                       << filename_halo_render_log_str << endl;
++               }
++            }
+             if (list_halos[i].z > ZMIN_EXTRAGAL) {
+                //cout << "    => omit " << list_halos[i].Name << " [" <<  list_halos[i].Type << "] from list: Can add only halos with redshift z <= 0.001." << endl;
+                print_warning("janalysis.cc", "gal_j2D()", "Halo " + list_halos[i].Name + " (" +  list_halos[i].Type
