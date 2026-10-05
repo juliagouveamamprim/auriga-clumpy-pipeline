@@ -435,6 +435,18 @@ The wrapper performs seven sequential steps:
 6. Run corrected CLUMPY.
 7. Combine the corrected and pointlike maps.
 
+#### Resume and overwrite behavior
+
+- If the final total FITS already exists and is non-empty, the wrapper stops
+  and refuses to overwrite it.
+- If the total FITS is missing but both the corrected CLUMPY FITS and pointlike
+  FITS exist and are non-empty, the wrapper resumes only the final combination
+  step.
+- If the corrected CLUMPY FITS exists but the pointlike FITS is missing or
+  empty, the wrapper stops instead of attempting an incomplete combination.
+- Otherwise, the pipeline follows the normal preparation → CLUMPY → combination
+  flow.
+
 Independent repopulations may run in parallel, but the internal steps for one case must remain sequential.
 
 ### Run a batch of CLUMPY cases

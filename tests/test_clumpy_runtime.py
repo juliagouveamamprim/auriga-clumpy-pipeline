@@ -157,6 +157,89 @@ def assert_two_clumpy_stages(result, call_log, expected_data):
     assert corrected[3].endswith("repop_0007_corrected_params_nside8.txt")
 
 
+def case_paths(repository):
+    case_dir = repository / "outputs" / "clumpy" / "resilient"
+    repop_dir = "repop_0007_nside8"
+    basename = "annihil_gal2D_LOS0_0_FOV360x180_nside8"
+
+    return {
+        "raw_list": (
+            case_dir / "lists" / "raw" / "repop_0007_raw_nopointlike_nside8.txt"
+        ),
+        "corrected_fits": (
+            case_dir / "outputs" / "corrected_clumpy" / repop_dir / f"{basename}.fits"
+        ),
+        "pointlike_fits": (
+            case_dir / "pointlike" / "repop_0007_pointlike_nside8.fits"
+        ),
+        "total_fits": (
+            case_dir / "outputs" / "total" / repop_dir / "auriga_total_nside8.fits"
+        ),
+    }
+
+
+def test_existing_corrected_and_pointlike_fits_resume_final_combination(tmp_path):
+    repository, fake_python, call_log = make_test_repository(tmp_path)
+    executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
+    paths = case_paths(repository)
+
+    paths["corrected_fits"].parent.mkdir(parents=True)
+    paths["corrected_fits"].write_text("fake corrected fits\n", encoding="utf-8")
+    paths["pointlike_fits"].parent.mkdir(parents=True)
+    paths["pointlike_fits"].write_text("fake pointlike fits\n", encoding="utf-8")
+
+    result = run_wrapper(repository, fake_python, call_log, executable)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        "Resuming from existing corrected CLUMPY and pointlike FITS files."
+        in result.stdout
+    )
+    assert paths["total_fits"].read_text(encoding="utf-8") == "fake fits\n"
+    assert not paths["raw_list"].exists()
+    assert not call_log.exists()
+
+
+def test_existing_total_fits_without_corrected_fits_refuses_all_stages(tmp_path):
+    repository, fake_python, call_log = make_test_repository(tmp_path)
+    executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
+    paths = case_paths(repository)
+
+    paths["total_fits"].parent.mkdir(parents=True)
+    paths["total_fits"].write_text("completed total fits\n", encoding="utf-8")
+
+    result = run_wrapper(repository, fake_python, call_log, executable)
+
+    assert result.returncode != 0
+    assert "final total FITS already exists and is non-empty" in result.stdout
+    assert paths["total_fits"].read_text(encoding="utf-8") == "completed total fits\n"
+    assert not paths["corrected_fits"].exists()
+    assert not paths["raw_list"].exists()
+    assert not call_log.exists()
+
+
+@pytest.mark.parametrize("pointlike_state", ["missing", "empty"])
+def test_resume_refuses_missing_or_empty_pointlike_fits(tmp_path, pointlike_state):
+    repository, fake_python, call_log = make_test_repository(tmp_path)
+    executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
+    paths = case_paths(repository)
+
+    paths["corrected_fits"].parent.mkdir(parents=True)
+    paths["corrected_fits"].write_text("fake corrected fits\n", encoding="utf-8")
+
+    if pointlike_state == "empty":
+        paths["pointlike_fits"].parent.mkdir(parents=True)
+        paths["pointlike_fits"].touch()
+
+    result = run_wrapper(repository, fake_python, call_log, executable)
+
+    assert result.returncode != 0
+    assert "pointlike FITS is missing or empty" in result.stdout
+    assert not paths["total_fits"].exists()
+    assert not paths["raw_list"].exists()
+    assert not call_log.exists()
+
+
 def test_explicit_valid_clumpy_data_is_respected(tmp_path):
     repository, fake_python, call_log = make_test_repository(tmp_path)
     executable = tmp_path / "custom-install" / "custom-clumpy"

@@ -136,6 +136,9 @@ CASE_DIR="${BASE_RUN_DIR}/${SCENARIO}"
 RAW_PARAM="${CASE_DIR}/params/generated/${REPOP_TAG}_raw_params${NSIDE_SUFFIX}.txt"
 CORRECTED_PARAM="${CASE_DIR}/params/generated/${REPOP_TAG}_corrected_params${NSIDE_SUFFIX}.txt"
 
+RAW_LIST="${CASE_DIR}/lists/raw/${REPOP_TAG}_raw_nopointlike${NSIDE_SUFFIX}.txt"
+POINTLIKE_FITS="${CASE_DIR}/pointlike/${REPOP_TAG}_pointlike_nside${NSIDE}.fits"
+
 RAW_CLUMPY_LOG="${CASE_DIR}/logs/raw_clumpy/${REPOP_TAG}_raw_clumpy${NSIDE_SUFFIX}.log"
 CORRECTED_CLUMPY_LOG="${CASE_DIR}/logs/corrected_clumpy/${REPOP_TAG}_corrected_clumpy${NSIDE_SUFFIX}.log"
 
@@ -169,12 +172,40 @@ echo "Time:      $(date)"
 echo "======================================================================"
 echo
 
-if [ -f "$FINAL_FITS" ] && [ -s "$FINAL_FITS" ]; then
-    echo "ERROR: final corrected FITS already exists and is non-empty:"
-    echo "  $FINAL_FITS"
+if [ -f "$TOTAL_FITS" ] && [ -s "$TOTAL_FITS" ]; then
+    echo "ERROR: final total FITS already exists and is non-empty:"
+    echo "  $TOTAL_FITS"
     echo
     echo "Refusing to overwrite an apparently completed run."
     exit 1
+fi
+
+if [ -f "$FINAL_FITS" ] && [ -s "$FINAL_FITS" ]; then
+    if [ ! -f "$POINTLIKE_FITS" ] || [ ! -s "$POINTLIKE_FITS" ]; then
+        echo "ERROR: cannot resume final map combination because the pointlike FITS is missing or empty:"
+        echo "  $POINTLIKE_FITS"
+        echo
+        echo "The existing corrected CLUMPY FITS was left unchanged:"
+        echo "  $FINAL_FITS"
+        exit 1
+    fi
+
+    echo "Resuming from existing corrected CLUMPY and pointlike FITS files."
+    echo "  Corrected CLUMPY: $FINAL_FITS"
+    echo "  Pointlike:        $POINTLIKE_FITS"
+
+    "${PYTHON}" "${SCRIPTS_DIR}/combine_clumpy_pointlike.py" \
+        "${REPOP_ID}" "${SCENARIO}" --nside "${NSIDE}"
+
+    if [ ! -f "$TOTAL_FITS" ] || [ ! -s "$TOTAL_FITS" ]; then
+        echo "ERROR: total FITS was not created or is empty:"
+        echo "  $TOTAL_FITS"
+        exit 1
+    fi
+
+    echo "Final total FITS:"
+    echo "  $TOTAL_FITS"
+    exit 0
 fi
 
 # ============================================================
@@ -205,9 +236,6 @@ if [ "${FORCE_POINTLIKE}" = "1" ]; then
 fi
 
 "${PYTHON}" "${SCRIPTS_DIR}/prepare_subhalo_components.py" "${PREPARE_ARGS[@]}"
-
-RAW_LIST="${CASE_DIR}/lists/raw/${REPOP_TAG}_raw_nopointlike${NSIDE_SUFFIX}.txt"
-POINTLIKE_FITS="${CASE_DIR}/pointlike/${REPOP_TAG}_pointlike_nside${NSIDE}.fits"
 
 if [ ! -f "$RAW_LIST" ]; then
     echo "ERROR: raw CLUMPY list was not created:"
