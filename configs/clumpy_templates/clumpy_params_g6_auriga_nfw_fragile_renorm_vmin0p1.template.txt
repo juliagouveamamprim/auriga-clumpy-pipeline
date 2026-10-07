@@ -178,6 +178,7 @@ gSIM_THETA_OBS_DEG                      [deg]          s                 <float 
 gSIM_THETA_ORTH_SIZE_DEG                [deg]          360               <float or 'd'>    Grid diameter in theta_orth-dir.
 gSIM_THETA_SIZE_DEG                     [deg]          180               <float>           Grid diameter in theta-dir.
 gSIM_EPS                                [-]            0.01              <float>           Numeric precision of the simulation
+gSIM_EPS_DRAWN                          [-]            0.01              <float>           Numeric precision for rendered halos
 gSIM_IS_WRITE_GALPOWERSPECTRUM          [-]            0                 <boolean (0/1)>   Write angular power spectrum of DM skymap
 gSIM_IS_WRITE_ROOTFILES                 [-]            0                 <boolean (0/1)>   Write output additionally in ROOT format
 gSIM_OUTPUT_DIR                         [-]            SET_BY_GENERATOR  <string or -1>    Output directory (absolute or relative)
