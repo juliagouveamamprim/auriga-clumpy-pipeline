@@ -12,10 +12,15 @@ p(\log_{10}c_V\mid V_{\max})\,d\log_{10}c_V\right]dV_{\max}.
 
 The inner expectation uses Gauss--Hermite quadrature for the Gaussian scatter
 in \(\log_{10}c_V\). The outer SHVF integral uses a uniform
-\(\log_{10}V_{\max}\) grid. Scientific parameters come only from
-[`configs/input_hydro.yml`](../../configs/input_hydro.yml): the scenario SHVF,
-the \([0.1,120]\) km/s range, the Moliné+21 concentration relation and
-scatter, the NFW conversion, and the host/cosmological quantities.
+\(\log_{10}V_{\max}\) grid. The default YAML configuration supplies the
+scenario SHVF parameters, the \(V_{\max}\) range, the concentration
+normalization and scatter, \(G\), \(H_0\), and the host \(R_{\rm vir}\),
+\(r_s\), and \(\rho_0\). The Moliné+21 concentration-polynomial coefficients,
+`RMAX_OVER_RS`, and the pre-renormalization `gMW_RHOSOL` baseline are defined
+directly in [`src/renormalization.py`](../../src/renormalization.py). The solar
+position in [`configs/input_hydro.yml`](../../configs/input_hydro.yml) is not
+an input to this calculation. The CLUMPY templates are also not inputs; they
+store the approved output values.
 
 Run from the repository root:
 
