@@ -60,10 +60,10 @@ repopulations:
   params_to_order_by:
     - Js
 
-  # In full-repop mode, these flags are currently saved, not used to remove halos.
-  # Later we will modify the code so that:
-  # - engulfs_Earth=True halos are not written;
-  # - Roche-failed halos remain written but with Js=0.
+  # In full-repop mode, Earth-engulfing and Roche-failed halos are removed
+  # before the full catalogue is written; neither is retained with Js=0.
+  # The allow_* settings apply only to the brightest-object path and do not
+  # control filtering of the saved full catalogue.
   allow_break_Roche: True
   allow_engulf_Earth: True
 
