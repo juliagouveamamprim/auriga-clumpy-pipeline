@@ -272,6 +272,7 @@ def synthetic_case(
         repop_id=repop_id,
         names=tuple(f"h{index}" for index in range(count)),
         j_catalog=ones,
+        j_target=ones * diagnostic.PRODUCTION_TARGET_FACTOR,
         theta_s_deg=np.arange(1, count + 1, dtype=float),
         j_rendered_raw=r_values.copy(),
         j_rendered_corr=r_values.copy(),
@@ -292,10 +293,15 @@ def test_valid_matching_indexed_lookup_and_ratios(tmp_path):
     assert case is not None
     assert case.names == tuple(LIST_NAMES)
     np.testing.assert_allclose(case.j_catalog, [10.0, 20.0])
-    np.testing.assert_allclose(case.r_raw, [0.8, 1.2])
-    np.testing.assert_allclose(case.r_corr, [1.0, 1.0])
-    assert np.max(case.r_raw) == pytest.approx(1.2)
-    np.testing.assert_allclose(case.delta_corr, [0.0, 0.0])
+    factor = diagnostic.PRODUCTION_TARGET_FACTOR
+    np.testing.assert_allclose(case.j_target, np.asarray([10.0, 20.0]) * factor)
+    np.testing.assert_allclose(case.r_raw, np.asarray([0.8, 1.2]) / factor)
+    np.testing.assert_allclose(case.r_corr, np.asarray([1.0, 1.0]) / factor)
+    assert np.max(case.r_raw) == pytest.approx(1.2 / factor)
+    np.testing.assert_allclose(
+        case.delta_corr,
+        np.full(2, 100.0 * abs(1.0 / factor - 1.0)),
+    )
     expected_theta_p = np.degrees(np.sqrt(4.0 * np.pi / 12.0))
     np.testing.assert_allclose(case.x, np.asarray([0.2, 0.4]) / expected_theta_p)
 
@@ -1010,6 +1016,8 @@ def test_matched_halo_csv_schema_values_and_order(tmp_path, monkeypatch):
             "theta_p_deg",
             "theta_s_over_theta_p",
             "J_catalog",
+            "J_target",
+            "production_target_factor",
             "J_raw",
             "R_raw",
             "delta_raw_percent",
@@ -1024,19 +1032,18 @@ def test_matched_halo_csv_schema_values_and_order(tmp_path, monkeypatch):
     assert [int(row["repop_id"]) for row in rows] == [REPOP_ID, REPOP_ID]
 
     theta_p = np.degrees(np.sqrt(4.0 * np.pi / (12.0 * NSIDE**2)))
+    factor = diagnostic.PRODUCTION_TARGET_FACTOR
     expected = [
-        (0.2, 10.0, 8.0, 0.8, 20.0, 10.0, 1.0, 0.0),
-        (0.4, 20.0, 24.0, 1.2, 20.0, 20.0, 1.0, 0.0),
+        (0.2, 10.0, 8.0, 0.8 / factor, 10.0, 1.0 / factor),
+        (0.4, 20.0, 24.0, 1.2 / factor, 20.0, 1.0 / factor),
     ]
     for row, (
         theta_s,
         j_catalog,
         j_raw,
         r_raw,
-        delta_raw,
         j_corr,
         r_corr,
-        delta_corr,
     ) in zip(rows, expected):
         assert float(row["theta_s_deg"]) == pytest.approx(theta_s)
         assert float(row["theta_p_deg"]) == pytest.approx(theta_p)
@@ -1044,12 +1051,18 @@ def test_matched_halo_csv_schema_values_and_order(tmp_path, monkeypatch):
             theta_s / theta_p
         )
         assert float(row["J_catalog"]) == pytest.approx(j_catalog)
+        assert float(row["J_target"]) == pytest.approx(j_catalog * factor)
+        assert float(row["production_target_factor"]) == pytest.approx(factor)
         assert float(row["J_raw"]) == pytest.approx(j_raw)
         assert float(row["R_raw"]) == pytest.approx(r_raw)
-        assert float(row["delta_raw_percent"]) == pytest.approx(delta_raw)
+        assert float(row["delta_raw_percent"]) == pytest.approx(
+            100.0 * abs(r_raw - 1.0)
+        )
         assert float(row["J_corr"]) == pytest.approx(j_corr)
         assert float(row["R_corr"]) == pytest.approx(r_corr)
-        assert float(row["delta_corr_percent"]) == pytest.approx(delta_corr)
+        assert float(row["delta_corr_percent"]) == pytest.approx(
+            100.0 * abs(r_corr - 1.0)
+        )
 
 
 def test_four_panel_figure_writes_without_external_latex(tmp_path, monkeypatch):
