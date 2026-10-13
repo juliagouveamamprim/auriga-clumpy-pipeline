@@ -865,6 +865,34 @@ def per_repopulation_summary(case: CaseData) -> dict[str, object]:
     return row
 
 
+def matched_halo_diagnostics_rows(
+    cases: Sequence[CaseData],
+    nside: int,
+) -> list[dict[str, object]]:
+    theta_p_deg = theta_pixel_deg(nside)
+    rows: list[dict[str, object]] = []
+    for case in cases:
+        for index, halo_name in enumerate(case.names):
+            rows.append(
+                {
+                    "scenario": case.scenario,
+                    "repop_id": case.repop_id,
+                    "halo_name": halo_name,
+                    "theta_s_deg": float(case.theta_s_deg[index]),
+                    "theta_p_deg": theta_p_deg,
+                    "theta_s_over_theta_p": float(case.x[index]),
+                    "J_catalog": float(case.j_catalog[index]),
+                    "J_raw": float(case.j_rendered_raw[index]),
+                    "R_raw": float(case.r_raw[index]),
+                    "delta_raw_percent": float(case.delta_raw[index]),
+                    "J_corr": float(case.j_rendered_corr[index]),
+                    "R_corr": float(case.r_corr[index]),
+                    "delta_corr_percent": float(case.delta_corr[index]),
+                }
+            )
+    return rows
+
+
 def ensemble_summary_rows(
     per_repopulation: Sequence[dict[str, object]],
 ) -> list[dict[str, object]]:
@@ -1269,6 +1297,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     per_repop = [per_repopulation_summary(case) for case in cases]
+    matched_halos = matched_halo_diagnostics_rows(cases, args.nside)
     ensemble = ensemble_summary_rows(per_repop)
     edges = common_log_edges(cases, args.x_bins)
     trend_rows, _ = build_trend_summaries(cases, edges)
@@ -1276,10 +1305,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     cdf_rows, _ = build_cdf_summaries(cases, cdf_grid)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    matched_halos_path = args.output_dir / "matched_halo_diagnostics.csv"
     per_repop_path = args.output_dir / "per_repopulation_summary.csv"
     ensemble_path = args.output_dir / "ensemble_summary.csv"
     trend_path = args.output_dir / "binned_trend_summary.csv"
     cdf_path = args.output_dir / "cdf_summary.csv"
+    write_csv(matched_halos_path, matched_halos)
     write_csv(per_repop_path, per_repop)
     write_csv(ensemble_path, ensemble)
     write_csv(trend_path, trend_rows)
@@ -1291,6 +1322,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     print_ensemble_summary(ensemble)
+    print(f"\nSaved: {matched_halos_path}")
     print(f"\nSaved: {per_repop_path}")
     print(f"Saved: {ensemble_path}")
     print(f"Saved: {trend_path}")

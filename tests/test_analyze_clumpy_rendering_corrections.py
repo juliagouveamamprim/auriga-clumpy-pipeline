@@ -683,6 +683,7 @@ def test_validate_only_reports_exclusion_and_writes_nothing(tmp_path, capsys):
     assert "total_fits_valid=no" in output
     assert "usable=no" in output
     assert "exclusion_reason=" in output
+    assert not (output_dir / "matched_halo_diagnostics.csv").exists()
     assert not output_dir.exists()
 
 
@@ -777,6 +778,7 @@ def test_full_analysis_writes_required_outputs(tmp_path, monkeypatch):
     )
     assert status == 0
     for name in (
+        "matched_halo_diagnostics.csv",
         "per_repopulation_summary.csv",
         "ensemble_summary.csv",
         "binned_trend_summary.csv",
@@ -785,6 +787,95 @@ def test_full_analysis_writes_required_outputs(tmp_path, monkeypatch):
         "clumpy_rendering_corrections_nside1.pdf",
     ):
         assert (output_dir / name).is_file()
+
+
+def test_matched_halo_csv_schema_values_and_order(tmp_path, monkeypatch):
+    catalog_root, clumpy_root, _ = make_valid_case(tmp_path)
+    output_dir = tmp_path / "analysis"
+
+    def fake_figure(trend_rows, cdf_rows, target, nside):
+        png = target / f"clumpy_rendering_corrections_nside{nside}.png"
+        pdf = target / f"clumpy_rendering_corrections_nside{nside}.pdf"
+        png.write_bytes(b"png")
+        pdf.write_bytes(b"pdf")
+        return png, pdf
+
+    monkeypatch.setattr(diagnostic, "make_figure", fake_figure)
+    status = diagnostic.main(
+        [
+            "--catalog-root",
+            str(catalog_root),
+            "--clumpy-root",
+            str(clumpy_root),
+            "--scenario",
+            SCENARIO,
+            "--repop-ids",
+            str(REPOP_ID),
+            "--nside",
+            str(NSIDE),
+            "--chunk-size",
+            "2",
+            "--x-bins",
+            "3",
+            "--cdf-points",
+            "8",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+    assert status == 0
+
+    path = output_dir / "matched_halo_diagnostics.csv"
+    with path.open(newline="") as stream:
+        reader = csv.DictReader(stream)
+        assert reader.fieldnames == [
+            "scenario",
+            "repop_id",
+            "halo_name",
+            "theta_s_deg",
+            "theta_p_deg",
+            "theta_s_over_theta_p",
+            "J_catalog",
+            "J_raw",
+            "R_raw",
+            "delta_raw_percent",
+            "J_corr",
+            "R_corr",
+            "delta_corr_percent",
+        ]
+        rows = list(reader)
+
+    assert [row["halo_name"] for row in rows] == ["halo_a", "halo_b"]
+    assert [row["scenario"] for row in rows] == [SCENARIO, SCENARIO]
+    assert [int(row["repop_id"]) for row in rows] == [REPOP_ID, REPOP_ID]
+
+    theta_p = np.degrees(np.sqrt(4.0 * np.pi / (12.0 * NSIDE**2)))
+    expected = [
+        (0.2, 10.0, 8.0, 0.8, 20.0, 10.0, 1.0, 0.0),
+        (0.4, 20.0, 24.0, 1.2, 20.0, 20.0, 1.0, 0.0),
+    ]
+    for row, (
+        theta_s,
+        j_catalog,
+        j_raw,
+        r_raw,
+        delta_raw,
+        j_corr,
+        r_corr,
+        delta_corr,
+    ) in zip(rows, expected):
+        assert float(row["theta_s_deg"]) == pytest.approx(theta_s)
+        assert float(row["theta_p_deg"]) == pytest.approx(theta_p)
+        assert float(row["theta_s_over_theta_p"]) == pytest.approx(
+            theta_s / theta_p
+        )
+        assert float(row["J_catalog"]) == pytest.approx(j_catalog)
+        assert float(row["J_raw"]) == pytest.approx(j_raw)
+        assert float(row["R_raw"]) == pytest.approx(r_raw)
+        assert float(row["delta_raw_percent"]) == pytest.approx(delta_raw)
+        assert float(row["J_corr"]) == pytest.approx(j_corr)
+        assert float(row["R_corr"]) == pytest.approx(r_corr)
+        assert float(row["delta_corr_percent"]) == pytest.approx(delta_corr)
 
 
 def test_four_panel_figure_writes_png_and_pdf(tmp_path):
