@@ -1052,7 +1052,19 @@ def test_matched_halo_csv_schema_values_and_order(tmp_path, monkeypatch):
         assert float(row["delta_corr_percent"]) == pytest.approx(delta_corr)
 
 
-def test_four_panel_figure_writes_png_and_pdf(tmp_path):
+def test_four_panel_figure_writes_without_external_latex(tmp_path, monkeypatch):
+    import matplotlib
+    from matplotlib import texmanager
+
+    def fail_if_external_tex_is_used(*args, **kwargs):
+        raise AssertionError("External LaTeX rendering was attempted")
+
+    monkeypatch.setenv("PATH", str(tmp_path / "no-executables"))
+    monkeypatch.setattr(
+        texmanager.TexManager,
+        "make_dvi",
+        fail_if_external_tex_is_used,
+    )
     cases = [
         synthetic_case("fragile", 1, np.asarray([0.9, 1.0, 1.1])),
         synthetic_case("resilient", 2, np.asarray([0.8, 1.0, 1.2])),
@@ -1062,5 +1074,7 @@ def test_four_panel_figure_writes_png_and_pdf(tmp_path):
     grid = diagnostic.common_cdf_grid(cases, 12)
     cdf_rows, _ = diagnostic.build_cdf_summaries(cases, grid)
     png, pdf = diagnostic.make_figure(trend_rows, cdf_rows, tmp_path, NSIDE)
+    assert matplotlib.rcParams["text.usetex"] is False
+    assert matplotlib.rcParams["mathtext.fontset"] == "stix"
     assert png.is_file() and png.stat().st_size > 0
     assert pdf.is_file() and pdf.stat().st_size > 0

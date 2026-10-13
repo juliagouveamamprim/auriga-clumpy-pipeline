@@ -1098,8 +1098,10 @@ def make_figure(
 
     plt.rcParams.update(
         {
-            "text.usetex": True,
+            "text.usetex": False,
             "font.family": "serif",
+            "font.serif": ["STIXGeneral", "DejaVu Serif"],
+            "mathtext.fontset": "stix",
             "axes.labelsize": 15,
             "axes.titlesize": 16,
             "xtick.labelsize": 13,
