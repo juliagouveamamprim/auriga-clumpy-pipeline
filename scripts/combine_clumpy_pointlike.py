@@ -33,6 +33,9 @@ def parse_args():
         type=int,
         default=DEFAULT_NSIDE,
     )
+    parser.add_argument("--corrected-fits", type=Path, default=None)
+    parser.add_argument("--pointlike-fits", type=Path, default=None)
+    parser.add_argument("--output-fits", type=Path, default=None)
     return parser.parse_args()
 
 
@@ -369,6 +372,12 @@ def main():
         args.scenario,
         args.nside,
     )
+    if args.corrected_fits is not None:
+        corrected_fits = args.corrected_fits
+    if args.pointlike_fits is not None:
+        pointlike_fits = args.pointlike_fits
+    if args.output_fits is not None:
+        output_fits = args.output_fits
 
     combine_maps(
         corrected_fits=corrected_fits,

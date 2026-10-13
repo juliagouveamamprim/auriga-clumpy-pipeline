@@ -96,6 +96,23 @@ def parse_args():
             "Output filenames always include the NSIDE value."
         ),
     )
+    parser.add_argument("--input-list", type=Path, default=None)
+    parser.add_argument(
+        "--validation-input-list",
+        type=Path,
+        default=None,
+        help=(
+            "Optional existing file used to validate a staged list while the "
+            "generated parameter file records --input-list."
+        ),
+    )
+    parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--output-param", type=Path, default=None)
+    parser.add_argument(
+        "--defer-output-dir-creation",
+        action="store_true",
+        help="Record --output-dir without creating it yet (for staged promotion).",
+    )
 
     return parser.parse_args()
 
@@ -216,7 +233,17 @@ def get_paths(repop_id, scenario, stage, nside):
     }
 
 
-def generate_one_param_file(repop_id, scenario, stage, nside=DEFAULT_NSIDE):
+def generate_one_param_file(
+    repop_id,
+    scenario,
+    stage,
+    nside=DEFAULT_NSIDE,
+    input_list=None,
+    validation_input_list=None,
+    output_dir=None,
+    output_param=None,
+    create_output_dir=True,
+):
     """
     Generate one CLUMPY parameter file for one scenario/repop/stage.
     """
@@ -230,18 +257,28 @@ def generate_one_param_file(repop_id, scenario, stage, nside=DEFAULT_NSIDE):
 
     repop_tag = paths["repop_tag"]
     template_path = paths["template_path"]
-    input_list = paths["input_list"]
-    output_dir = paths["output_dir"]
-    output_param = paths["output_param"]
+    input_list = Path(input_list) if input_list is not None else paths["input_list"]
+    output_dir = Path(output_dir) if output_dir is not None else paths["output_dir"]
+    output_param = (
+        Path(output_param) if output_param is not None else paths["output_param"]
+    )
 
     if not template_path.exists():
         raise FileNotFoundError(f"Template not found: {template_path}")
 
-    if not input_list.exists():
-        raise FileNotFoundError(f"Input CLUMPY list not found: {input_list}")
+    input_to_validate = (
+        Path(validation_input_list)
+        if validation_input_list is not None
+        else input_list
+    )
+    if not input_to_validate.exists():
+        raise FileNotFoundError(
+            f"Input CLUMPY list not found: {input_to_validate}"
+        )
 
     output_param.parent.mkdir(parents=True, exist_ok=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    if create_output_dir:
+        output_dir.mkdir(parents=True, exist_ok=True)
 
     lines = template_path.read_text(encoding="utf-8").splitlines()
 
@@ -336,6 +373,11 @@ def main():
         scenario=args.scenario,
         stage=args.stage,
         nside=args.nside,
+        input_list=args.input_list,
+        validation_input_list=args.validation_input_list,
+        output_dir=args.output_dir,
+        output_param=args.output_param,
+        create_output_dir=not args.defer_output_dir_creation,
     )
 
 

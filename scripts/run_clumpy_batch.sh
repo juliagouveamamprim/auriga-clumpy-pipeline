@@ -5,12 +5,18 @@ usage() {
     cat <<'EOF'
 Usage:
   bash scripts/run_clumpy_batch.sh <start_id> <end_id> <scenario> [max_jobs]
+      [--from-correction] [--discard-stale-downstream]
 
 Arguments:
   start_id    First repopulation ID, inclusive
   end_id      Last repopulation ID, inclusive
   scenario    resilient, fragile, or both
   max_jobs    Maximum number of concurrent cases (default: 8)
+  --from-correction
+              Reuse existing raw products and rerun only correction onward
+  --discard-stale-downstream
+              With --from-correction, delete validated stale downstream
+              products instead of archiving them
 
 Environment variables:
   POLL_SECONDS          Seconds between concurrency checks (default: 60)
@@ -22,6 +28,7 @@ Environment variables:
   FORCE_POINTLIKE       Regenerate valid pointlike FITS files (0 or 1; default: 0)
   CLUMPY_EXECUTABLE     CLUMPY executable or wrapper inherited by one-case runs
   PYTHON_EXECUTABLE     Python executable inherited by one-case runs
+  CATALOG_ROOT          Root containing repop_XXXX HDF5 catalogues
 
 Examples:
   bash scripts/run_clumpy_batch.sh 160 179 resilient 8
@@ -30,7 +37,7 @@ Examples:
 EOF
 }
 
-if [[ $# -lt 3 || $# -gt 4 ]]; then
+if [[ $# -lt 3 || $# -gt 6 ]]; then
     usage
     exit 2
 fi
@@ -38,7 +45,42 @@ fi
 START_ID="$1"
 END_ID="$2"
 SCENARIO_MODE="$3"
-MAX_JOBS="${4:-8}"
+MAX_JOBS=8
+FROM_CORRECTION=0
+MAX_JOBS_SET=0
+DISCARD_STALE_DOWNSTREAM=0
+for argument in "${@:4}"; do
+    case "${argument}" in
+        --from-correction)
+            if [[ "${FROM_CORRECTION}" == "1" ]]; then
+                echo "ERROR: duplicate option: ${argument}" >&2
+                exit 2
+            fi
+            FROM_CORRECTION=1
+            ;;
+        --discard-stale-downstream)
+            if [[ "${DISCARD_STALE_DOWNSTREAM}" == "1" ]]; then
+                echo "ERROR: duplicate option: ${argument}" >&2
+                exit 2
+            fi
+            DISCARD_STALE_DOWNSTREAM=1
+            ;;
+        *)
+            if [[ "${MAX_JOBS_SET}" == "1" ]]; then
+                echo "ERROR: unexpected argument: ${argument}" >&2
+                exit 2
+            fi
+            MAX_JOBS="${argument}"
+            MAX_JOBS_SET=1
+            ;;
+    esac
+done
+
+if [[ "${DISCARD_STALE_DOWNSTREAM}" == "1" \
+    && "${FROM_CORRECTION}" != "1" ]]; then
+    echo "ERROR: --discard-stale-downstream requires --from-correction" >&2
+    exit 2
+fi
 
 POLL_SECONDS="${POLL_SECONDS:-60}"
 LAUNCH_DELAY_SECONDS="${LAUNCH_DELAY_SECONDS:-5}"
@@ -48,6 +90,7 @@ NSIDE="${NSIDE:-${DEFAULT_NSIDE}}"
 EXTENDED_CUT_F="${EXTENDED_CUT_F:-}"
 POINTLIKE_CUT_F="${POINTLIKE_CUT_F:-}"
 FORCE_POINTLIKE="${FORCE_POINTLIKE:-0}"
+CATALOG_ROOT="${CATALOG_ROOT:-}"
 
 export NSIDE EXTENDED_CUT_F POINTLIKE_CUT_F FORCE_POINTLIKE
 
@@ -98,6 +141,8 @@ esac
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 ONE_CASE_SCRIPT="${SCRIPT_DIR}/run_clumpy_one_case.sh"
+CATALOG_ROOT="${CATALOG_ROOT:-${REPO_ROOT}/outputs}"
+export CATALOG_ROOT
 
 if [[ ! -f "${ONE_CASE_SCRIPT}" ]]; then
     echo "ERROR: one-case wrapper not found: ${ONE_CASE_SCRIPT}" >&2
@@ -122,6 +167,9 @@ echo "Maximum jobs:     ${MAX_JOBS}"
 echo "Poll interval:    ${POLL_SECONDS} s"
 echo "Launch delay:     ${LAUNCH_DELAY_SECONDS} s"
 echo "Skip completed:   ${SKIP_COMPLETED}"
+echo "From correction:  ${FROM_CORRECTION}"
+echo "Discard stale:    ${DISCARD_STALE_DOWNSTREAM}"
+echo "Catalogue root:   ${CATALOG_ROOT}"
 echo "NSIDE:            ${NSIDE}"
 echo "Cuts:"
 echo "  EXTENDED_CUT_F:      ${EXTENDED_CUT_F:-none}"
@@ -138,7 +186,7 @@ for repop_id in $(seq "${START_ID}" "${END_ID}"); do
     printf -v repop_tag "repop_%04d" "${repop_id}"
 
     for scenario in "${SCENARIOS[@]}"; do
-        input_h5="${REPO_ROOT}/outputs/${repop_tag}/fullrepop_hydro_${scenario}.h5"
+        input_h5="${CATALOG_ROOT}/${repop_tag}/fullrepop_hydro_${scenario}.h5"
 
         if [[ ! -s "${input_h5}" ]]; then
             echo "MISSING INPUT: ${input_h5}" >&2
@@ -187,7 +235,19 @@ launch_case() {
         echo "================================================================================"
         echo
 
-        bash "${ONE_CASE_SCRIPT}" "${repop_id}" "${scenario}"
+        if [[ "${FROM_CORRECTION}" == "1" ]]; then
+            ONE_CASE_ARGS=(
+                "${repop_id}"
+                "${scenario}"
+                "--from-correction"
+            )
+            if [[ "${DISCARD_STALE_DOWNSTREAM}" == "1" ]]; then
+                ONE_CASE_ARGS+=("--discard-stale-downstream")
+            fi
+            bash "${ONE_CASE_SCRIPT}" "${ONE_CASE_ARGS[@]}"
+        else
+            bash "${ONE_CASE_SCRIPT}" "${repop_id}" "${scenario}"
+        fi
         status=$?
 
         echo
@@ -230,7 +290,9 @@ for repop_id in $(seq "${START_ID}" "${END_ID}"); do
     for scenario in "${SCENARIOS[@]}"; do
         final_fits="${REPO_ROOT}/outputs/clumpy/${scenario}/outputs/total/${repop_tag}_nside${NSIDE}/auriga_total_nside${NSIDE}.fits"
 
-        if [[ "${SKIP_COMPLETED}" == "1" && -s "${final_fits}" ]]; then
+        if [[ "${FROM_CORRECTION}" == "0" \
+            && "${SKIP_COMPLETED}" == "1" \
+            && -s "${final_fits}" ]]; then
             echo "Skipping completed ${repop_tag} ${scenario}"
             echo "  final FITS: ${final_fits}"
             skipped=$((skipped + 1))

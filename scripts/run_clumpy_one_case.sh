@@ -7,7 +7,8 @@ set -euo pipefail
 #
 # Usage:
 #
-#   bash scripts/run_clumpy_one_case.sh <repop_id> <scenario>
+#   bash scripts/run_clumpy_one_case.sh <repop_id> <scenario> [--from-correction]
+#       [--discard-stale-downstream]
 #
 # Examples:
 #
@@ -29,9 +30,9 @@ set -euo pipefail
 #   - plot_extended.py
 # ============================================================
 
-if [ "$#" -ne 2 ]; then
+if [ "$#" -lt 2 ] || [ "$#" -gt 4 ]; then
     echo "Usage:"
-    echo "  bash $0 <repop_id> <scenario>"
+    echo "  bash $0 <repop_id> <scenario> [--from-correction] [--discard-stale-downstream]"
     echo
     echo "Examples:"
     echo "  bash $0 1 resilient"
@@ -41,6 +42,36 @@ fi
 
 REPOP_ID="$1"
 SCENARIO="$2"
+RUN_MODE="normal"
+DISCARD_STALE_DOWNSTREAM=0
+for option in "${@:3}"; do
+    case "${option}" in
+        --from-correction)
+            if [ "${RUN_MODE}" = "from-correction" ]; then
+                echo "ERROR: duplicate option: ${option}" >&2
+                exit 2
+            fi
+            RUN_MODE="from-correction"
+            ;;
+        --discard-stale-downstream)
+            if [ "${DISCARD_STALE_DOWNSTREAM}" = "1" ]; then
+                echo "ERROR: duplicate option: ${option}" >&2
+                exit 2
+            fi
+            DISCARD_STALE_DOWNSTREAM=1
+            ;;
+        *)
+            echo "ERROR: unknown mode: ${option}" >&2
+            exit 2
+            ;;
+    esac
+done
+
+if [ "${DISCARD_STALE_DOWNSTREAM}" = "1" ] \
+    && [ "${RUN_MODE}" != "from-correction" ]; then
+    echo "ERROR: --discard-stale-downstream requires --from-correction" >&2
+    exit 2
+fi
 
 if [ "$SCENARIO" != "resilient" ] && [ "$SCENARIO" != "fragile" ]; then
     echo "ERROR: scenario must be 'resilient' or 'fragile'."
@@ -57,6 +88,7 @@ REPOP_TAG=$(printf "repop_%04d" "$REPOP_ID")
 SCRIPTS_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd -- "${SCRIPTS_DIR}/.." && pwd)"
 BASE_RUN_DIR="${REPOSITORY_ROOT}/outputs/clumpy"
+CATALOG_ROOT="${CATALOG_ROOT:-${REPOSITORY_ROOT}/outputs}"
 
 # Set CLUMPY_EXECUTABLE to the CLUMPY binary or wrapper.
 # The executable must produce the patched *.halo_rendered.log output.
@@ -151,6 +183,9 @@ CORRECTED_RENDERED_LOG="${CORRECTED_OUTPUT_DIR}/${CLUMPY_BASENAME}.halo_rendered
 FINAL_FITS="${CORRECTED_OUTPUT_DIR}/${CLUMPY_BASENAME}.fits"
 TOTAL_OUTPUT_DIR="${CASE_DIR}/outputs/total/${REPOP_TAG}_nside${NSIDE}"
 TOTAL_FITS="${TOTAL_OUTPUT_DIR}/auriga_total_nside${NSIDE}.fits"
+CATALOG_H5="${CATALOG_ROOT}/${REPOP_TAG}/fullrepop_hydro_${SCENARIO}.h5"
+CORRECTED_LIST="${CASE_DIR}/lists/corrected/${REPOP_TAG}_rhocorr${NSIDE_SUFFIX}.txt"
+CORRECTION_OUTPUT_DIR="${CASE_DIR}/logs/correction/${REPOP_RUN_TAG}"
 
 echo
 echo "======================================================================"
@@ -161,6 +196,9 @@ echo "REPOP_TAG: ${REPOP_TAG}"
 echo "SCENARIO:  ${SCENARIO}"
 echo "NSIDE:     ${NSIDE}"
 echo "Run tag:   ${REPOP_RUN_TAG}"
+echo "Run mode:  ${RUN_MODE}"
+echo "Discard stale downstream: ${DISCARD_STALE_DOWNSTREAM}"
+echo "Catalogue root: ${CATALOG_ROOT}"
 echo "CLUMPY:    ${CLUMPY}"
 echo "CLUMPY_DATA: ${CLUMPY_DATA}"
 echo "Cuts:"
@@ -171,6 +209,302 @@ echo "  Extended aperture:   hp.max_pixrad(NSIDE), derived automatically"
 echo "Time:      $(date)"
 echo "======================================================================"
 echo
+
+if [ "${RUN_MODE}" = "from-correction" ]; then
+    echo "----------------------------------------------------------------------"
+    echo "Downstream-only rerun from existing raw correction inputs"
+    echo "----------------------------------------------------------------------"
+
+    for required_path in \
+        "${CATALOG_H5}" \
+        "${RAW_LIST}" \
+        "${RAW_RENDERED_LOG}" \
+        "${POINTLIKE_FITS}"; do
+        if [ ! -f "${required_path}" ] || [ ! -s "${required_path}" ]; then
+            echo "ERROR: required downstream-rerun input is missing or empty:" >&2
+            echo "  ${required_path}" >&2
+            exit 1
+        fi
+    done
+
+    echo "Validating authoritative HDF5 and raw list/log identity (read only)..."
+    "${PYTHON}" "${SCRIPTS_DIR}/correct_rhos_from_clumpy_raw.py" \
+        "${REPOP_ID}" "${SCENARIO}" \
+        --nside "${NSIDE}" \
+        --catalog-root "${CATALOG_ROOT}" \
+        --clumpy-root "${BASE_RUN_DIR}" \
+        --raw-list "${RAW_LIST}" \
+        --raw-rendered-log "${RAW_RENDERED_LOG}" \
+        --validate-only
+
+    echo "Validating existing point-like FITS (read only)..."
+    "${PYTHON}" "${SCRIPTS_DIR}/prepare_subhalo_components.py" \
+        "${REPOP_ID}" "${SCENARIO}" \
+        --nside "${NSIDE}" \
+        --catalog-root "${CATALOG_ROOT}" \
+        --validate-pointlike-only
+
+    resolve_product_path() {
+        realpath -m -- "$1"
+    }
+
+    paths_overlap() {
+        local first="$1"
+        local second="$2"
+        [ "${first}" = "${second}" ] \
+            || [[ "${first}" == "${second}/"* ]] \
+            || [[ "${second}" == "${first}/"* ]]
+    }
+
+    CASE_DIR_RESOLVED=$(resolve_product_path "${CASE_DIR}")
+    PRESERVE_PATHS=(
+        "${CATALOG_H5}"
+        "${RAW_LIST}"
+        "${RAW_PARAM}"
+        "${RAW_OUTPUT_DIR}"
+        "${RAW_RENDERED_LOG}"
+        "${RAW_CLUMPY_LOG}"
+        "${POINTLIKE_FITS}"
+    )
+    STALE_DOWNSTREAM_PATHS=(
+        "${CORRECTION_OUTPUT_DIR}"
+        "${CORRECTED_LIST}"
+        "${CORRECTED_PARAM}"
+        "${CORRECTED_OUTPUT_DIR}"
+        "${CORRECTED_CLUMPY_LOG}"
+        "${TOTAL_OUTPUT_DIR}"
+    )
+    PRESERVE_PATHS_RESOLVED=()
+    STALE_DOWNSTREAM_PATHS_RESOLVED=()
+
+    for path in "${PRESERVE_PATHS[@]}"; do
+        PRESERVE_PATHS_RESOLVED+=("$(resolve_product_path "${path}")")
+    done
+    for path in "${STALE_DOWNSTREAM_PATHS[@]}"; do
+        resolved_path=$(resolve_product_path "${path}")
+        if [[ "${resolved_path}" != "${CASE_DIR_RESOLVED}/"* ]]; then
+            echo "ERROR: refusing downstream cleanup path outside case tree:" >&2
+            echo "  ${resolved_path}" >&2
+            echo "Expected beneath:" >&2
+            echo "  ${CASE_DIR_RESOLVED}" >&2
+            exit 1
+        fi
+        for preserve_path in "${PRESERVE_PATHS_RESOLVED[@]}"; do
+            if paths_overlap "${resolved_path}" "${preserve_path}"; then
+                echo "ERROR: downstream cleanup path overlaps a preserved path:" >&2
+                echo "  remove:   ${resolved_path}" >&2
+                echo "  preserve: ${preserve_path}" >&2
+                exit 1
+            fi
+        done
+        STALE_DOWNSTREAM_PATHS_RESOLVED+=("${resolved_path}")
+    done
+
+    if [ "${DISCARD_STALE_DOWNSTREAM}" = "1" ]; then
+        echo
+        echo "WILL PRESERVE:"
+        for path in "${PRESERVE_PATHS_RESOLVED[@]}"; do
+            echo "  ${path}"
+        done
+        echo "WILL REMOVE:"
+        for path in "${STALE_DOWNSTREAM_PATHS_RESOLVED[@]}"; do
+            echo "  ${path}"
+        done
+        echo
+        echo "All read-only prerequisites passed; removing stale downstream products."
+        for path in "${STALE_DOWNSTREAM_PATHS_RESOLVED[@]}"; do
+            if [ -e "${path}" ] || [ -L "${path}" ]; then
+                rm -rf -- "${path}"
+            fi
+        done
+    fi
+
+    mkdir -p "${CASE_DIR}"
+    BACKFILL_STAGE_ROOT=$(mktemp -d \
+        "${CASE_DIR}/.from_correction_${REPOP_RUN_TAG}.XXXXXX")
+    STAGE_CORRECTION_DIR="${BACKFILL_STAGE_ROOT}/logs/correction/${REPOP_RUN_TAG}"
+    STAGE_CORRECTED_LIST="${BACKFILL_STAGE_ROOT}/lists/corrected/${REPOP_TAG}_rhocorr${NSIDE_SUFFIX}.txt"
+    STAGE_CORRECTED_PARAM="${BACKFILL_STAGE_ROOT}/params/${REPOP_TAG}_corrected_params${NSIDE_SUFFIX}.txt"
+    STAGE_STABLE_CORRECTED_PARAM="${BACKFILL_STAGE_ROOT}/stable_params/${REPOP_TAG}_corrected_params${NSIDE_SUFFIX}.txt"
+    STAGE_CORRECTED_LOG="${BACKFILL_STAGE_ROOT}/logs/corrected_clumpy/${REPOP_TAG}_corrected_clumpy${NSIDE_SUFFIX}.log"
+    STAGE_CORRECTED_OUTPUT_DIR="${BACKFILL_STAGE_ROOT}/outputs/corrected_clumpy/${REPOP_RUN_TAG}"
+    STAGE_CORRECTED_FITS="${STAGE_CORRECTED_OUTPUT_DIR}/${CLUMPY_BASENAME}.fits"
+    STAGE_CORRECTED_RENDERED_LOG="${STAGE_CORRECTED_OUTPUT_DIR}/${CLUMPY_BASENAME}.halo_rendered.log"
+    STAGE_TOTAL_OUTPUT_DIR="${BACKFILL_STAGE_ROOT}/outputs/total/${REPOP_RUN_TAG}"
+    STAGE_TOTAL_FITS="${STAGE_TOTAL_OUTPUT_DIR}/auriga_total_nside${NSIDE}.fits"
+
+    echo "Staging downstream products under:"
+    echo "  ${BACKFILL_STAGE_ROOT}"
+
+    "${PYTHON}" "${SCRIPTS_DIR}/correct_rhos_from_clumpy_raw.py" \
+        "${REPOP_ID}" "${SCENARIO}" \
+        --nside "${NSIDE}" \
+        --catalog-root "${CATALOG_ROOT}" \
+        --clumpy-root "${BASE_RUN_DIR}" \
+        --raw-list "${RAW_LIST}" \
+        --raw-rendered-log "${RAW_RENDERED_LOG}" \
+        --output-list "${STAGE_CORRECTED_LIST}" \
+        --output-dir "${STAGE_CORRECTION_DIR}" \
+        --metadata-output-dir "${CORRECTION_OUTPUT_DIR}"
+
+    if [ ! -s "${STAGE_CORRECTED_LIST}" ]; then
+        echo "ERROR: staged corrected list was not created or is empty" >&2
+        exit 1
+    fi
+
+    "${PYTHON}" "${SCRIPTS_DIR}/generate_clumpy_params.py" \
+        "${REPOP_ID}" "${SCENARIO}" corrected \
+        --nside "${NSIDE}" \
+        --input-list "${STAGE_CORRECTED_LIST}" \
+        --output-dir "${STAGE_CORRECTED_OUTPUT_DIR}" \
+        --output-param "${STAGE_CORRECTED_PARAM}"
+
+    if [ ! -s "${STAGE_CORRECTED_PARAM}" ]; then
+        echo "ERROR: staged corrected parameter file was not created or is empty" >&2
+        exit 1
+    fi
+
+    "${PYTHON}" "${SCRIPTS_DIR}/generate_clumpy_params.py" \
+        "${REPOP_ID}" "${SCENARIO}" corrected \
+        --nside "${NSIDE}" \
+        --input-list "${CORRECTED_LIST}" \
+        --validation-input-list "${STAGE_CORRECTED_LIST}" \
+        --output-dir "${CORRECTED_OUTPUT_DIR}" \
+        --output-param "${STAGE_STABLE_CORRECTED_PARAM}" \
+        --defer-output-dir-creation
+
+    mkdir -p "$(dirname "${STAGE_CORRECTED_LOG}")"
+    /usr/bin/time -v "${CLUMPY}" -g6 -i "${STAGE_CORRECTED_PARAM}" \
+        2>&1 | tee "${STAGE_CORRECTED_LOG}"
+
+    if [ ! -s "${STAGE_CORRECTED_RENDERED_LOG}" ]; then
+        echo "ERROR: staged corrected halo_rendered.log is missing or empty" >&2
+        exit 1
+    fi
+    if [ ! -s "${STAGE_CORRECTED_FITS}" ]; then
+        echo "ERROR: staged corrected FITS is missing or empty" >&2
+        exit 1
+    fi
+
+    "${PYTHON}" "${SCRIPTS_DIR}/combine_clumpy_pointlike.py" \
+        "${REPOP_ID}" "${SCENARIO}" \
+        --nside "${NSIDE}" \
+        --corrected-fits "${STAGE_CORRECTED_FITS}" \
+        --pointlike-fits "${POINTLIKE_FITS}" \
+        --output-fits "${STAGE_TOTAL_FITS}"
+
+    if [ ! -s "${STAGE_TOTAL_FITS}" ]; then
+        echo "ERROR: staged total FITS is missing or empty" >&2
+        exit 1
+    fi
+
+    BACKUP_ROOT=""
+    if [ "${DISCARD_STALE_DOWNSTREAM}" = "0" ]; then
+        BACKUP_ROOT="${CASE_DIR}/backups/from_correction/${REPOP_RUN_TAG}_$(date +%Y%m%d_%H%M%S)_$$"
+        mkdir -p "${BACKUP_ROOT}"
+    fi
+    PROMOTION_ACTIVE=1
+    PROMOTED_DESTINATIONS=()
+    PROMOTED_BACKUPS=()
+    PROMOTED_LABELS=()
+
+    rollback_promotions() {
+        local index destination backup label failed_dir
+        failed_dir="${BACKFILL_STAGE_ROOT}/failed_promotion"
+        mkdir -p "${failed_dir}"
+        for ((index=${#PROMOTED_DESTINATIONS[@]}-1; index>=0; index--)); do
+            destination="${PROMOTED_DESTINATIONS[index]}"
+            backup="${PROMOTED_BACKUPS[index]}"
+            label="${PROMOTED_LABELS[index]}"
+            if [ -e "${destination}" ]; then
+                mv "${destination}" "${failed_dir}/${label}"
+            fi
+            if [ -n "${backup}" ] && [ -e "${backup}" ]; then
+                mkdir -p "$(dirname "${destination}")"
+                mv "${backup}" "${destination}"
+            fi
+        done
+    }
+
+    promotion_error() {
+        local status=$?
+        if [ "${PROMOTION_ACTIVE}" = "1" ]; then
+            if [ "${DISCARD_STALE_DOWNSTREAM}" = "1" ]; then
+                echo "ERROR: downstream promotion failed; returning new products to staging" >&2
+            else
+                echo "ERROR: downstream promotion failed; restoring prior stable products" >&2
+            fi
+            PROMOTION_ACTIVE=0
+            rollback_promotions
+        fi
+        echo "Staged products retained at: ${BACKFILL_STAGE_ROOT}" >&2
+        exit "${status}"
+    }
+    trap promotion_error ERR
+
+    promote_product() {
+        local source="$1"
+        local destination="$2"
+        local label="$3"
+        local backup=""
+        mkdir -p "$(dirname "${destination}")"
+        if [ -e "${destination}" ]; then
+            if [ "${DISCARD_STALE_DOWNSTREAM}" = "1" ]; then
+                echo "ERROR: downstream destination unexpectedly exists after cleanup:" >&2
+                echo "  ${destination}" >&2
+                return 1
+            else
+                backup="${BACKUP_ROOT}/${label}"
+                mkdir -p "$(dirname "${backup}")"
+                mv "${destination}" "${backup}"
+            fi
+        fi
+        if ! mv "${source}" "${destination}"; then
+            if [ -n "${backup}" ] && [ -e "${backup}" ]; then
+                mv "${backup}" "${destination}"
+            fi
+            return 1
+        fi
+        PROMOTED_DESTINATIONS+=("${destination}")
+        PROMOTED_BACKUPS+=("${backup}")
+        PROMOTED_LABELS+=("${label}")
+    }
+
+    promote_product "${STAGE_CORRECTION_DIR}" "${CORRECTION_OUTPUT_DIR}" \
+        "correction_diagnostics"
+    promote_product "${STAGE_CORRECTED_LIST}" "${CORRECTED_LIST}" \
+        "corrected_list.txt"
+    promote_product "${STAGE_STABLE_CORRECTED_PARAM}" "${CORRECTED_PARAM}" \
+        "corrected_params.txt"
+    promote_product "${STAGE_CORRECTED_OUTPUT_DIR}" "${CORRECTED_OUTPUT_DIR}" \
+        "corrected_clumpy_output"
+    promote_product "${STAGE_CORRECTED_LOG}" "${CORRECTED_CLUMPY_LOG}" \
+        "corrected_clumpy_stdout.log"
+    promote_product "${STAGE_TOTAL_OUTPUT_DIR}" "${TOTAL_OUTPUT_DIR}" \
+        "total_output"
+
+    if [ "${DISCARD_STALE_DOWNSTREAM}" = "1" ]; then
+        rm -f -- "${STAGE_CORRECTED_PARAM}"
+        rm -rf -- "${BACKFILL_STAGE_ROOT}"
+    else
+        mv "${STAGE_CORRECTED_PARAM}" "${BACKUP_ROOT}/staging_execution_params.txt"
+    fi
+    PROMOTION_ACTIVE=0
+    trap - ERR
+
+    echo
+    echo "Downstream-only correction rerun completed successfully."
+    echo "Raw products were read only and were not regenerated."
+    if [ "${DISCARD_STALE_DOWNSTREAM}" = "1" ]; then
+        echo "Stale downstream products were discarded after validation; no backup was retained."
+    else
+        echo "Previous downstream products, when present, were archived under:"
+        echo "  ${BACKUP_ROOT}"
+    fi
+    echo "Stable total FITS:"
+    echo "  ${TOTAL_FITS}"
+    exit 0
+fi
 
 if [ -f "$TOTAL_FITS" ] && [ -s "$TOTAL_FITS" ]; then
     echo "ERROR: final total FITS already exists and is non-empty:"
@@ -221,6 +555,7 @@ PREPARE_ARGS=(
     "${REPOP_ID}"
     "${SCENARIO}"
     "--nside" "${NSIDE}"
+    "--catalog-root" "${CATALOG_ROOT}"
 )
 
 if [ -n "${EXTENDED_CUT_F}" ]; then
@@ -297,9 +632,8 @@ echo "Step 4/7: correct rho_s from raw CLUMPY rendered log"
 echo "----------------------------------------------------------------------"
 
 "${PYTHON}" "${SCRIPTS_DIR}/correct_rhos_from_clumpy_raw.py" \
-    "${REPOP_ID}" "${SCENARIO}" --nside "${NSIDE}"
-
-CORRECTED_LIST="${CASE_DIR}/lists/corrected/${REPOP_TAG}_rhocorr${NSIDE_SUFFIX}.txt"
+    "${REPOP_ID}" "${SCENARIO}" --nside "${NSIDE}" \
+    --catalog-root "${CATALOG_ROOT}" --clumpy-root "${BASE_RUN_DIR}"
 
 if [ ! -f "$CORRECTED_LIST" ]; then
     echo "ERROR: corrected list was not created:"

@@ -22,14 +22,15 @@ and the corresponding CLUMPY raw rendered-halo log:
 
 It computes, halo by halo:
 
-    R = J_rendered / J_expected
+    R_raw = J_raw / J_catalog
 
-where J_expected is the analytic NFW J(<r_s) computed from the CLUMPY list.
+where J_catalog is read directly from the authoritative HDF5 catalogue by
+exact halo name.
 
 The correction applied to the CLUMPY list is:
 
-    X = 1 / sqrt(R)
-    rhos_new = X * rhos_old
+    correction_factor = sqrt(J_catalog / J_raw)
+    rhos_corrected = correction_factor * rhos_raw
 
 because J scales as rho_s^2.
 
@@ -40,13 +41,14 @@ The corrected list is written to:
 """
 
 import argparse
-import math
-import warnings
+import re
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from astropy import units as u
 
 
 # ============================================================
@@ -57,10 +59,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 BASE_RUN_DIR = REPOSITORY_ROOT / "outputs" / "clumpy"
 
 DEFAULT_NSIDE = 2048
-
-# Conversion factor:
-# [Msun^2 / kpc^5] -> [GeV^2 / cm^5]
-MSUN2_KPC5_TO_GEV2_CM5 = 4.446e6
+DEFAULT_CATALOG_ROOT = REPOSITORY_ROOT / "outputs"
+HALO_NAME_PATTERN = re.compile(r"^hydro_res_(0*[1-9][0-9]*)$")
 
 
 # ============================================================
@@ -94,6 +94,45 @@ def parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--catalog-root",
+        type=Path,
+        default=DEFAULT_CATALOG_ROOT,
+        help=(
+            "Root containing repop_XXXX/fullrepop_hydro_<scenario>.h5. "
+            "This may be separate from the CLUMPY product root."
+        ),
+    )
+
+    parser.add_argument(
+        "--clumpy-root",
+        type=Path,
+        default=BASE_RUN_DIR,
+        help="Root containing the scenario-specific CLUMPY products.",
+    )
+
+    parser.add_argument("--raw-list", type=Path, default=None)
+    parser.add_argument("--raw-rendered-log", type=Path, default=None)
+    parser.add_argument("--output-list", type=Path, default=None)
+    parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument(
+        "--metadata-output-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Final promoted correction directory to record in metadata when "
+            "writing into a staging directory."
+        ),
+    )
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help=(
+            "Validate the raw list/log and authoritative HDF5 matching "
+            "without writing correction products."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -113,9 +152,20 @@ def clumpy_basename(nside):
     return f"annihil_gal2D_LOS0_0_FOV360x180_nside{nside}"
 
 
-def get_paths(repop_id, scenario, nside):
+def get_paths(
+    repop_id,
+    scenario,
+    nside,
+    catalog_root=None,
+    clumpy_root=None,
+):
     repop_tag = f"repop_{repop_id:04d}"
-    scenario_dir = BASE_RUN_DIR / scenario
+    if catalog_root is None:
+        catalog_root = DEFAULT_CATALOG_ROOT
+    if clumpy_root is None:
+        clumpy_root = BASE_RUN_DIR
+    catalog_root = Path(catalog_root)
+    scenario_dir = Path(clumpy_root) / scenario
     suffix = nside_suffix(nside)
     output_repop_dir = clumpy_repop_dir(repop_tag, nside)
 
@@ -154,6 +204,11 @@ def get_paths(repop_id, scenario, nside):
     return {
         "repop_tag": repop_tag,
         "scenario_dir": scenario_dir,
+        "catalog": (
+            catalog_root
+            / repop_tag
+            / f"fullrepop_hydro_{scenario}.h5"
+        ),
         "input_list": input_list,
         "raw_clumpy_output_dir": raw_clumpy_output_dir,
         "rendered_log": rendered_log,
@@ -196,8 +251,10 @@ def load_clumpy_list(path):
 
             parts = s.split()
 
-            if len(parts) < 13:
-                continue
+            if len(parts) != 13:
+                raise RuntimeError(
+                    f"Malformed CLUMPY-list row in {path}: {s!r}"
+                )
 
             rows.append({
                 "halo_name": parts[0],
@@ -207,7 +264,7 @@ def load_clumpy_list(path):
                 "d_kpc": float(parts[4]),
                 "z": float(parts[5]),
                 "Rdelta_kpc": float(parts[6]),
-                "rhos_old": float(parts[7]),
+                "rhos_raw": float(parts[7]),
                 "rs_kpc": float(parts[8]),
                 "prof": parts[9],
                 "p1": int(float(parts[10])),
@@ -219,6 +276,15 @@ def load_clumpy_list(path):
 
     if df.empty:
         raise RuntimeError(f"No halo rows found in the CLUMPY list file: {path}")
+
+    duplicate_names = df.loc[
+        df["halo_name"].duplicated(keep=False), "halo_name"
+    ].unique()
+    if duplicate_names.size:
+        raise RuntimeError(
+            "Raw CLUMPY list contains duplicate halo names: "
+            + ", ".join(map(str, duplicate_names[:5]))
+        )
 
     return df
 
@@ -237,94 +303,195 @@ def load_rendered_log(path):
     if not path.exists():
         raise FileNotFoundError(f"Rendered log not found: {path}")
 
-    df = pd.read_csv(
-        path,
-        sep=r"\s+",
-        comment="#",
-        header=None,
-        names=["HALO_INDEX", "NAME", "TYPE", "J_RENDERED", "NPIX_TOUCHED"],
-        engine="python",
-    )
+    rows = []
+    with path.open("r", encoding="utf-8") as stream:
+        for line_number, line in enumerate(stream, start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            parts = stripped.split()
+            if len(parts) != 5:
+                raise RuntimeError(
+                    f"Malformed rendered-log row {line_number} in {path}: "
+                    f"expected 5 fields, found {len(parts)}"
+                )
+            try:
+                halo_index = int(parts[0])
+                j_raw = float(parts[3])
+                npix_touched = int(parts[4])
+            except ValueError as error:
+                raise RuntimeError(
+                    f"Malformed rendered-log row {line_number} in {path}: "
+                    f"{stripped!r}"
+                ) from error
+            rows.append(
+                {
+                    "HALO_INDEX": halo_index,
+                    "halo_name": parts[1],
+                    "rendered_type": parts[2],
+                    "J_raw": j_raw,
+                    "npix_touched": npix_touched,
+                }
+            )
 
-    df = df.rename(columns={
-        "NAME": "halo_name",
-        "TYPE": "rendered_type",
-        "J_RENDERED": "J_rendered",
-        "NPIX_TOUCHED": "npix_touched",
-    })
-
-    df["HALO_INDEX"] = pd.to_numeric(df["HALO_INDEX"], errors="coerce")
-    df["J_rendered"] = pd.to_numeric(df["J_rendered"], errors="coerce")
-    df["npix_touched"] = pd.to_numeric(df["npix_touched"], errors="coerce")
-
-    df = df.dropna(subset=["halo_name"]).copy()
-    df["HALO_INDEX"] = df["HALO_INDEX"].astype(int)
+    df = pd.DataFrame(rows)
 
     if df.empty:
         raise RuntimeError(f"No valid rows found in rendered log: {path}")
+
+    duplicate_names = df.loc[
+        df["halo_name"].duplicated(keep=False), "halo_name"
+    ].unique()
+    if duplicate_names.size:
+        raise RuntimeError(
+            "Raw rendered log contains duplicate halo names: "
+            + ", ".join(map(str, duplicate_names[:5]))
+        )
+
+    expected_indices = np.arange(len(df), dtype=np.int64)
+    actual_indices = df["HALO_INDEX"].to_numpy(dtype=np.int64)
+    if not np.array_equal(actual_indices, expected_indices):
+        raise RuntimeError(
+            "Raw rendered-log HALO_INDEX must be exactly zero-based 0..N-1"
+        )
 
     return df
 
 
 # ============================================================
-# ANALYTIC J(<rs) FOR NFW
+# TARGETED HDF5 CATALOGUE LOOKUP
 # ============================================================
 
-def j_expected_from_list(df):
-    """
-    Compute analytic J(<rs) for NFW halos directly from the CLUMPY list.
+def _decode_strings(values):
+    return [
+        value.decode("utf-8") if isinstance(value, bytes) else str(value)
+        for value in values
+    ]
 
-    The list stores:
 
-        rhos = rho(rs) = rho_s / 4
+def _validate_js_unit(unit_text, catalog_path):
+    try:
+        parsed = u.Unit(unit_text)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(
+            f"Invalid Js unit {unit_text!r} in {catalog_path}"
+        ) from error
+    if not parsed.is_equivalent(u.GeV**2 / u.cm**5):
+        raise RuntimeError(
+            f"Unexpected Js unit {unit_text!r} in {catalog_path}; "
+            "expected GeV^2 cm^-5"
+        )
 
-    For NFW integrated up to r_s:
 
-        J(<r_s) = (7*pi/6) * rho_s^2 * r_s^3 / D^2
+def load_catalog_js_indexed(catalog_path, target_names):
+    """Read only requested catalogue Js rows and preserve list order."""
+    catalog_path = Path(catalog_path)
+    if not catalog_path.is_file() or catalog_path.stat().st_size == 0:
+        raise FileNotFoundError(f"HDF5 catalogue not found or empty: {catalog_path}")
 
-    Since rho_s = 4 * rhos:
+    if len(set(target_names)) != len(target_names):
+        raise RuntimeError("Requested HDF5 halo names are not unique")
 
-        J(<r_s) = (56*pi/3) * rhos^2 * r_s^3 / D^2
+    try:
+        with h5py.File(catalog_path, "r") as handle:
+            if "iteration_0" not in handle:
+                raise RuntimeError(
+                    f"Missing HDF5 group iteration_0 in {catalog_path}"
+                )
+            group = handle["iteration_0"]
+            if "data" not in group or "halo_name" not in group:
+                raise RuntimeError(
+                    f"Missing iteration_0/data or iteration_0/halo_name in "
+                    f"{catalog_path}"
+                )
+            data = group["data"]
+            stored_names = group["halo_name"]
+            if data.ndim != 2:
+                raise RuntimeError(
+                    f"iteration_0/data must be two-dimensional in {catalog_path}"
+                )
+            if stored_names.shape[0] != data.shape[0]:
+                raise RuntimeError(
+                    f"halo_name length {stored_names.shape[0]} does not match "
+                    f"data length {data.shape[0]} in {catalog_path}"
+                )
+            n_saved = group.attrs.get("n_saved")
+            if n_saved is None or int(n_saved) != data.shape[0]:
+                raise RuntimeError(
+                    f"HDF5 n_saved metadata does not match data length in "
+                    f"{catalog_path}"
+                )
+            if "column_names" not in data.attrs or "units" not in data.attrs:
+                raise RuntimeError(
+                    f"HDF5 data is missing column_names or units in {catalog_path}"
+                )
+            column_names = _decode_strings(data.attrs["column_names"])
+            units = _decode_strings(data.attrs["units"])
+            if len(column_names) != data.shape[1] or len(units) != data.shape[1]:
+                raise RuntimeError(
+                    f"HDF5 column_names/units length mismatch in {catalog_path}"
+                )
+            if column_names.count("Js") != 1:
+                raise RuntimeError(
+                    f"HDF5 must contain exactly one Js column in {catalog_path}"
+                )
+            js_index = column_names.index("Js")
+            _validate_js_unit(units[js_index], catalog_path)
 
-    Units:
-        rhos in Msun/kpc^3
-        r_s and D in kpc
-        J in Msun^2/kpc^5
+            inferred_rows = []
+            for name in target_names:
+                match = HALO_NAME_PATTERN.fullmatch(name)
+                if match is None:
+                    raise RuntimeError(
+                        f"Non-canonical halo name {name!r}; expected "
+                        "hydro_res_<positive numeric suffix>"
+                    )
+                row_index = int(match.group(1)) - 1
+                if row_index < 0 or row_index >= data.shape[0]:
+                    raise RuntimeError(
+                        f"Halo name {name!r} implies HDF5 row {row_index}, "
+                        f"outside 0..{data.shape[0] - 1}"
+                    )
+                inferred_rows.append(row_index)
 
-    Then converted to GeV^2/cm^5.
-    """
-    out = df.copy()
+            if len(set(inferred_rows)) != len(inferred_rows):
+                raise RuntimeError("Inferred HDF5 row indices are not unique")
 
-    d = out["d_kpc"].to_numpy(dtype=float)
-    rs = out["rs_kpc"].to_numpy(dtype=float)
-    rhos = out["rhos_old"].to_numpy(dtype=float)
+            rows = np.asarray(inferred_rows, dtype=np.int64)
+            sort_order = np.argsort(rows, kind="stable")
+            sorted_rows = rows[sort_order]
+            expected_sorted_names = [target_names[index] for index in sort_order]
+            actual_sorted_names = _decode_strings(stored_names[sorted_rows])
+            sorted_js = np.asarray(
+                data[sorted_rows, js_index], dtype=np.float64
+            )
 
-    j_msun2_kpc5 = (56.0 * math.pi / 3.0) * (rhos ** 2) * (rs ** 3) / (d ** 2)
-    j_gev2_cm5 = j_msun2_kpc5 * MSUN2_KPC5_TO_GEV2_CM5
+            for row_index, expected_name, actual_name in zip(
+                sorted_rows, expected_sorted_names, actual_sorted_names
+            ):
+                if actual_name != expected_name:
+                    raise RuntimeError(
+                        f"HDF5 identity mismatch at row {int(row_index)}: "
+                        f"expected {expected_name!r}, found {actual_name!r}"
+                    )
+    except OSError as error:
+        raise RuntimeError(
+            f"Could not open HDF5 catalogue {catalog_path}: {error}"
+        ) from error
 
-    out["J_expected"] = j_gev2_cm5
-
-    # Angular size derived from list itself, for diagnostics.
-    out["theta_deg_from_list"] = np.degrees(np.arctan(rs / d))
-
-    # Recover standard NFW scale density too.
-    out["rho_s_old"] = 4.0 * out["rhos_old"]
-
-    return out
+    catalog_js = np.empty(len(sorted_js), dtype=np.float64)
+    catalog_js[sort_order] = sorted_js
+    if np.any(~np.isfinite(catalog_js)) or np.any(catalog_js <= 0.0):
+        raise RuntimeError("Matched HDF5 J_catalog values must be finite and positive")
+    return rows, catalog_js
 
 
 # ============================================================
 # CORE
 # ============================================================
 
-def build_matched_table(list_df, rendered_df):
-    """
-    Match list halos with rendered halos by halo_name and compute:
-
-        R = J_rendered / J_expected
-        X = 1/sqrt(R)
-        rhos_new = X * rhos_old
-    """
+def validate_raw_correspondence(list_df, rendered_df):
+    """Require a complete, ordered, one-to-one raw-list/log correspondence."""
     raw_names = set(list_df["halo_name"])
     rendered_names = set(rendered_df["halo_name"])
     raw_only = raw_names - rendered_names
@@ -335,35 +502,59 @@ def build_matched_table(list_df, rendered_df):
             "Halo identifier mismatch: "
             f"raw-only={len(raw_only)}, log-only={len(log_only)}"
         )
-
-    df = list_df.merge(
-        rendered_df[["halo_name", "J_rendered", "npix_touched", "HALO_INDEX"]],
-        on="halo_name",
-        how="inner",
-        validate="one_to_one",
-    )
-
-    valid = (
-        np.isfinite(df["J_expected"]) & (df["J_expected"] > 0.0) &
-        np.isfinite(df["J_rendered"]) & (df["J_rendered"] > 0.0) &
-        np.isfinite(df["rhos_old"]) & (df["rhos_old"] > 0.0)
-    )
-
-    n_excluded = int((~valid).sum())
-    if n_excluded:
-        warnings.warn(
-            f"Excluded {n_excluded} matched halos with invalid correction inputs; "
-            "their original rhos values will be retained.",
-            RuntimeWarning,
-            stacklevel=2,
+    if len(list_df) != len(rendered_df):
+        raise RuntimeError(
+            f"Raw list/log row-count mismatch: {len(list_df)} != "
+            f"{len(rendered_df)}"
+        )
+    list_names = list_df["halo_name"].tolist()
+    log_names = rendered_df["halo_name"].tolist()
+    if log_names != list_names:
+        raise RuntimeError(
+            "Raw rendered-log names/order do not match the raw CLUMPY list"
+        )
+    if rendered_df["rendered_type"].tolist() != list_df["type"].tolist():
+        raise RuntimeError(
+            "Raw rendered-log TYPE sequence does not match the raw CLUMPY list"
         )
 
-    df = df[valid].copy()
 
-    df["R"] = df["J_rendered"] / df["J_expected"]
-    df["X"] = 1.0 / np.sqrt(df["R"])
-    df["rhos_new"] = df["X"] * df["rhos_old"]
-    df["rho_s_new"] = 4.0 * df["rhos_new"]
+def build_matched_table(list_df, rendered_df, hdf5_rows, catalog_js):
+    """
+    Match list halos with rendered halos by halo_name and compute:
+
+        R_raw = J_raw / J_catalog
+        correction_factor = sqrt(J_catalog / J_raw)
+        rhos_corrected = correction_factor * rhos_raw
+    """
+    validate_raw_correspondence(list_df, rendered_df)
+    if len(hdf5_rows) != len(list_df) or len(catalog_js) != len(list_df):
+        raise RuntimeError("HDF5 lookup result length does not match raw list")
+
+    df = list_df.copy()
+    df["HALO_INDEX"] = rendered_df["HALO_INDEX"].to_numpy(dtype=np.int64)
+    df["hdf5_row"] = np.asarray(hdf5_rows, dtype=np.int64)
+    df["J_catalog"] = np.asarray(catalog_js, dtype=np.float64)
+    df["J_raw"] = rendered_df["J_raw"].to_numpy(dtype=np.float64)
+    df["npix_touched"] = rendered_df["npix_touched"].to_numpy(dtype=np.int64)
+
+    if np.any(~np.isfinite(df["J_raw"])) or np.any(df["J_raw"] <= 0.0):
+        raise RuntimeError("J_raw values must be finite and positive")
+    if np.any(~np.isfinite(df["J_catalog"])) or np.any(df["J_catalog"] <= 0.0):
+        raise RuntimeError("J_catalog values must be finite and positive")
+    if np.any(~np.isfinite(df["rhos_raw"])) or np.any(df["rhos_raw"] <= 0.0):
+        raise RuntimeError("rhos_raw values must be finite and positive")
+
+    df["R_raw"] = df["J_raw"] / df["J_catalog"]
+    df["correction_factor"] = np.sqrt(df["J_catalog"] / df["J_raw"])
+    df["rhos_corrected"] = df["correction_factor"] * df["rhos_raw"]
+    df["rho_s_corrected"] = 4.0 * df["rhos_corrected"]
+    df["theta_deg_from_list"] = np.degrees(
+        np.arctan(
+            df["rs_kpc"].to_numpy(dtype=float)
+            / df["d_kpc"].to_numpy(dtype=float)
+        )
+    )
 
     return df
 
@@ -377,50 +568,50 @@ def make_plots(df, paths):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     plt.figure(figsize=(7, 5))
-    plt.scatter(df["theta_deg_from_list"], df["R"], s=10)
+    plt.scatter(df["theta_deg_from_list"], df["R_raw"], s=10)
     plt.xscale("log")
     plt.axhline(1.0, linestyle="--")
     plt.xlabel("Angular size [deg]")
-    plt.ylabel("R = J_rendered / J_expected")
+    plt.ylabel("R_raw = J_raw / J_catalog")
     plt.tight_layout()
     plt.savefig(paths["plot_R_vs_theta"], dpi=180)
     plt.close()
 
     plt.figure(figsize=(7, 5))
-    plt.scatter(df["theta_deg_from_list"], df["X"], s=10)
+    plt.scatter(df["theta_deg_from_list"], df["correction_factor"], s=10)
     plt.xscale("log")
     plt.axhline(1.0, linestyle="--")
     plt.xlabel("Angular size [deg]")
-    plt.ylabel("X = 1 / sqrt(R)")
+    plt.ylabel("correction_factor = sqrt(J_catalog / J_raw)")
     plt.tight_layout()
     plt.savefig(paths["plot_X_vs_theta"], dpi=180)
     plt.close()
 
     plt.figure(figsize=(7, 5))
-    plt.hist(df["R"], bins=60)
+    plt.hist(df["R_raw"], bins=60)
     plt.axvline(1.0, linestyle="--")
-    plt.xlabel("R = J_rendered / J_expected")
+    plt.xlabel("R_raw = J_raw / J_catalog")
     plt.ylabel("Number of halos")
     plt.tight_layout()
     plt.savefig(paths["plot_R_hist"], dpi=180)
     plt.close()
 
     plt.figure(figsize=(7, 5))
-    plt.scatter(df["d_kpc"], df["R"], s=10)
+    plt.scatter(df["d_kpc"], df["R_raw"], s=10)
     plt.xscale("log")
     plt.axhline(1.0, linestyle="--")
     plt.xlabel("Distance [kpc]")
-    plt.ylabel("R = J_rendered / J_expected")
+    plt.ylabel("R_raw = J_raw / J_catalog")
     plt.tight_layout()
     plt.savefig(paths["plot_R_vs_d"], dpi=180)
     plt.close()
 
     plt.figure(figsize=(7, 5))
-    plt.scatter(df["npix_touched"], df["R"], s=10)
+    plt.scatter(df["npix_touched"], df["R_raw"], s=10)
     plt.xscale("log")
     plt.axhline(1.0, linestyle="--")
     plt.xlabel("NPIX_TOUCHED")
-    plt.ylabel("R = J_rendered / J_expected")
+    plt.ylabel("R_raw = J_raw / J_catalog")
     plt.tight_layout()
     plt.savefig(paths["plot_R_vs_npix"], dpi=180)
     plt.close()
@@ -450,7 +641,7 @@ def write_corrected_list(
     output_list_path = Path(output_list_path)
     output_list_path.parent.mkdir(parents=True, exist_ok=True)
 
-    corr_map = corr_df.set_index("halo_name")["rhos_new"].to_dict()
+    corr_map = corr_df.set_index("halo_name")["rhos_corrected"].to_dict()
 
     out_lines = []
 
@@ -463,11 +654,14 @@ def write_corrected_list(
         f"# REPOP_ID: {repop_id}",
         f"# Raw list: {paths['input_list']}",
         f"# Rendered log: {paths['rendered_log']}",
-        f"# Correction table: {paths['output_table']}",
+        f"# Authoritative HDF5 catalogue: {paths['catalog']}",
+        f"# Correction table: "
+        f"{paths.get('metadata_output_table', paths['output_table'])}",
+        "# Correction target: authoritative HDF5 catalogue Js",
         "# Correction rule:",
-        "#   R = J_rendered / J_expected",
-        "#   X = 1 / sqrt(R)",
-        "#   rhos_new = X * rhos_old",
+        "#   R_raw = J_raw / J_catalog",
+        "#   correction_factor = sqrt(J_catalog / J_raw)",
+        "#   rhos_corrected = rhos_raw * correction_factor",
         "# =============================================================================",
         "#",
     ]
@@ -537,7 +731,42 @@ def main():
     if nside <= 0 or (nside & (nside - 1)) != 0:
         raise ValueError("nside must be a positive power of two.")
 
-    paths = get_paths(repop_id=repop_id, scenario=scenario, nside=nside)
+    paths = get_paths(
+        repop_id=repop_id,
+        scenario=scenario,
+        nside=nside,
+        catalog_root=getattr(args, "catalog_root", DEFAULT_CATALOG_ROOT),
+        clumpy_root=getattr(args, "clumpy_root", BASE_RUN_DIR),
+    )
+    raw_list_override = getattr(args, "raw_list", None)
+    rendered_log_override = getattr(args, "raw_rendered_log", None)
+    output_list_override = getattr(args, "output_list", None)
+    output_dir_override = getattr(args, "output_dir", None)
+    metadata_output_dir = getattr(args, "metadata_output_dir", None)
+    if raw_list_override is not None:
+        paths["input_list"] = raw_list_override
+    if rendered_log_override is not None:
+        paths["rendered_log"] = rendered_log_override
+    if output_list_override is not None:
+        paths["output_list"] = output_list_override
+    if output_dir_override is not None:
+        paths["output_dir"] = output_dir_override
+        paths["output_table"] = (
+            output_dir_override
+            / f"matched_R_diagnostics_{scenario}_{paths['repop_tag']}"
+            f"{nside_suffix(nside)}.csv"
+        )
+        paths["plot_R_vs_theta"] = output_dir_override / "R_vs_theta.png"
+        paths["plot_X_vs_theta"] = output_dir_override / "X_vs_theta.png"
+        paths["plot_R_hist"] = output_dir_override / "R_hist.png"
+        paths["plot_R_vs_d"] = output_dir_override / "R_vs_distance.png"
+        paths["plot_R_vs_npix"] = output_dir_override / "R_vs_npix.png"
+    if metadata_output_dir is not None:
+        paths["metadata_output_table"] = (
+            metadata_output_dir
+            / f"matched_R_diagnostics_{scenario}_{paths['repop_tag']}"
+            f"{nside_suffix(nside)}.csv"
+        )
 
     print()
     print("=" * 80)
@@ -549,24 +778,45 @@ def main():
     print(f"NSIDE: {nside}")
     print(f"Input list: {paths['input_list']}")
     print(f"Rendered log: {paths['rendered_log']}")
+    print(f"Authoritative HDF5 catalogue: {paths['catalog']}")
     print(f"Output corrected list: {paths['output_list']}")
     print(f"Diagnostics output dir: {paths['output_dir']}")
     print("=" * 80)
     print()
 
-    paths["output_dir"].mkdir(parents=True, exist_ok=True)
-
     list_df = load_clumpy_list(paths["input_list"])
-    list_df = j_expected_from_list(list_df)
-
     rendered_df = load_rendered_log(paths["rendered_log"])
+    validate_raw_correspondence(list_df, rendered_df)
+    hdf5_rows, catalog_js = load_catalog_js_indexed(
+        paths["catalog"],
+        list_df["halo_name"].tolist(),
+    )
 
-    matched = build_matched_table(list_df, rendered_df)
+    matched = build_matched_table(
+        list_df,
+        rendered_df,
+        hdf5_rows,
+        catalog_js,
+    )
+    matched.insert(0, "catalog_path", str(paths["catalog"]))
+    matched.insert(
+        1,
+        "correction_target",
+        "authoritative HDF5 catalogue Js",
+    )
 
     if matched.empty:
         raise RuntimeError(
             "No matched valid halos found. Check halo names in list and rendered log."
         )
+
+    if getattr(args, "validate_only", False):
+        print(f"Validated matched raw halos: {len(matched)}")
+        print("Validation-only mode: no correction products were written.")
+        print("=" * 80)
+        return
+
+    paths["output_dir"].mkdir(parents=True, exist_ok=True)
 
     matched.to_csv(paths["output_table"], index=False)
 
@@ -589,10 +839,16 @@ def main():
     print(f"Halos in rendered log: {n_log}")
     print(f"Matched valid halos: {n_matched}")
     print()
-    print(f"Median R: {np.nanmedian(matched['R']):.6f}")
-    print(f"Mean R:   {np.nanmean(matched['R']):.6f}")
-    print(f"Median X: {np.nanmedian(matched['X']):.6f}")
-    print(f"Mean X:   {np.nanmean(matched['X']):.6f}")
+    print(f"Median R_raw: {np.nanmedian(matched['R_raw']):.6f}")
+    print(f"Mean R_raw:   {np.nanmean(matched['R_raw']):.6f}")
+    print(
+        "Median correction factor: "
+        f"{np.nanmedian(matched['correction_factor']):.6f}"
+    )
+    print(
+        "Mean correction factor:   "
+        f"{np.nanmean(matched['correction_factor']):.6f}"
+    )
     print()
     print(f"Saved diagnostics table: {paths['output_table']}")
     print(f"Saved plot: {paths['plot_R_vs_theta']}")

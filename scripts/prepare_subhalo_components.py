@@ -136,6 +136,12 @@ def parse_args():
             "automatic pointlike/extended angular threshold."
         ),
     )
+    parser.add_argument(
+        "--catalog-root",
+        type=Path,
+        default=BASE_H5_DIR,
+        help="Root containing repop_XXXX HDF5 catalogue directories.",
+    )
 
     parser.add_argument(
         "--extended-cut-f",
@@ -177,6 +183,14 @@ def parse_args():
             "passes validation. The extended raw list is always regenerated."
         ),
     )
+    parser.add_argument(
+        "--validate-pointlike-only",
+        action="store_true",
+        help=(
+            "Validate the existing point-like FITS structure and provenance "
+            "without reading the catalogue or writing any products."
+        ),
+    )
 
     return parser.parse_args()
 
@@ -185,7 +199,7 @@ def parse_args():
 # Path helpers
 # ============================================================
 
-def get_h5_dir(repop_id):
+def get_h5_dir(repop_id, catalog_root=BASE_H5_DIR):
     """
     Return HDF5 directory for a given global repop ID.
 
@@ -193,14 +207,14 @@ def get_h5_dir(repop_id):
 
         outputs/repop_XXXX/
     """
-    return BASE_H5_DIR / f"repop_{repop_id:04d}"
+    return Path(catalog_root) / f"repop_{repop_id:04d}"
 
 
-def get_input_h5(repop_id, scenario):
+def get_input_h5(repop_id, scenario, catalog_root=BASE_H5_DIR):
     """
     Return input HDF5 file for one repop/scenario.
     """
-    return get_h5_dir(repop_id) / f"fullrepop_hydro_{scenario}.h5"
+    return get_h5_dir(repop_id, catalog_root) / f"fullrepop_hydro_{scenario}.h5"
 
 
 def get_output_list(repop_id, scenario, top_n, nside=NSIDE):
@@ -595,12 +609,14 @@ def validate_existing_pointlike_fits(
     theta_cut_deg,
     pointlike_cut_f=None,
     j_pixel_ref=None,
+    check_cut_metadata=True,
 ):
     """Return whether an existing pointlike FITS can be safely reused.
 
     This performs structural and provenance checks without scanning the full
-    maps. When the pointlike catalogue cut is enabled, ``j_pixel_ref`` must be
-    the value freshly computed from the current source catalogue.
+    maps. When ``check_cut_metadata`` is true and the pointlike catalogue cut
+    is enabled, ``j_pixel_ref`` must be freshly computed from the source
+    catalogue.
     """
 
     path = Path(path)
@@ -725,33 +741,34 @@ def validate_existing_pointlike_fits(
                 ):
                     return False, f"{label}: PIXEL endpoints do not match"
 
-                if pointlike_cut_f is None:
-                    if "FPL" in hdu.header or "JCPL" in hdu.header:
-                        return False, (
-                            f"{label}: unexpected pointlike cut metadata"
-                        )
-                else:
-                    if j_pixel_ref is None:
-                        return False, "current JREF was not provided"
+                if check_cut_metadata:
+                    if pointlike_cut_f is None:
+                        if "FPL" in hdu.header or "JCPL" in hdu.header:
+                            return False, (
+                                f"{label}: unexpected pointlike cut metadata"
+                            )
+                    else:
+                        if j_pixel_ref is None:
+                            return False, "current JREF was not provided"
 
-                    if not matching_float(
-                        hdu.header.get("FPL"),
-                        pointlike_cut_f,
-                    ):
-                        return False, f"{label}: FPL does not match"
+                        if not matching_float(
+                            hdu.header.get("FPL"),
+                            pointlike_cut_f,
+                        ):
+                            return False, f"{label}: FPL does not match"
 
-                    if not matching_float(
-                        hdu.header.get("JREF"),
-                        j_pixel_ref,
-                    ):
-                        return False, f"{label}: JREF does not match"
+                        if not matching_float(
+                            hdu.header.get("JREF"),
+                            j_pixel_ref,
+                        ):
+                            return False, f"{label}: JREF does not match"
 
-                    expected_j_cut = pointlike_cut_f * j_pixel_ref
-                    if not matching_float(
-                        hdu.header.get("JCPL"),
-                        expected_j_cut,
-                    ):
-                        return False, f"{label}: JCPL does not match"
+                        expected_j_cut = pointlike_cut_f * j_pixel_ref
+                        if not matching_float(
+                            hdu.header.get("JCPL"),
+                            expected_j_cut,
+                        ):
+                            return False, f"{label}: JCPL does not match"
 
     except (
         OSError,
@@ -1506,7 +1523,7 @@ def main():
     if nside <= 0 or (nside & (nside - 1)) != 0:
         raise ValueError("nside must be a positive power of two.")
 
-    input_h5 = get_input_h5(repop_id, scenario)
+    input_h5 = get_input_h5(repop_id, scenario, args.catalog_root)
     output_list = get_output_list(
         repop_id,
         scenario,
@@ -1518,6 +1535,28 @@ def main():
         scenario,
         nside,
     )
+
+    if args.validate_pointlike_only:
+        theta_cut_deg = round_up(
+            healpix_pixel_size_deg(nside),
+            decimals=ROUND_UP_DECIMALS,
+        )
+        valid, reason = validate_existing_pointlike_fits(
+            output_pointlike_fits,
+            nside=nside,
+            scenario=scenario,
+            repop_id=repop_id,
+            theta_cut_deg=theta_cut_deg,
+            check_cut_metadata=False,
+        )
+        if not valid:
+            raise RuntimeError(
+                f"Existing point-like FITS is not valid: {reason}: "
+                f"{output_pointlike_fits}"
+            )
+        print(f"Validated existing point-like FITS: {output_pointlike_fits}")
+        print("Validation-only mode: no products were written.")
+        return
 
     prepare_subhalo_components(
         input_h5=input_h5,

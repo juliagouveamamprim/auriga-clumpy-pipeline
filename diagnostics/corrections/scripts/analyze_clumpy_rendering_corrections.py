@@ -34,9 +34,6 @@ SCENARIO_COLORS = {
 DEFAULT_NSIDE = 2048
 DEFAULT_X_BINS = 24
 DEFAULT_CDF_POINTS = 512
-PRODUCTION_J_CONVERSION = 4.446e6
-CATALOG_J_CONVERSION = 4.447552864e6
-PRODUCTION_TARGET_FACTOR = PRODUCTION_J_CONVERSION / CATALOG_J_CONVERSION
 HALO_NAME_PATTERN = re.compile(r"^hydro_res_(0*[1-9][0-9]*)$")
 LOG_HEADER = (
     "HALO_INDEX",
@@ -105,7 +102,6 @@ class CaseData:
     repop_id: int
     names: tuple[str, ...]
     j_catalog: np.ndarray
-    j_target: np.ndarray
     theta_s_deg: np.ndarray
     j_rendered_raw: np.ndarray
     j_rendered_corr: np.ndarray
@@ -812,9 +808,8 @@ def validate_case(
     j_corr = np.asarray(
         [row.j_rendered for row in corrected_log], dtype=np.float64
     )
-    j_target = j_catalog * PRODUCTION_TARGET_FACTOR
-    r_raw = j_raw / j_target
-    r_corr = j_corr / j_target
+    r_raw = j_raw / j_catalog
+    r_corr = j_corr / j_catalog
     delta_raw = 100.0 * np.abs(r_raw - 1.0)
     delta_corr = 100.0 * np.abs(r_corr - 1.0)
     x = theta_s / theta_pixel_deg(nside)
@@ -833,7 +828,6 @@ def validate_case(
         repop_id=repop_id,
         names=names,
         j_catalog=j_catalog,
-        j_target=j_target,
         theta_s_deg=theta_s,
         j_rendered_raw=j_raw,
         j_rendered_corr=j_corr,
@@ -887,8 +881,6 @@ def matched_halo_diagnostics_rows(
                     "theta_p_deg": theta_p_deg,
                     "theta_s_over_theta_p": float(case.x[index]),
                     "J_catalog": float(case.j_catalog[index]),
-                    "J_target": float(case.j_target[index]),
-                    "production_target_factor": PRODUCTION_TARGET_FACTOR,
                     "J_raw": float(case.j_rendered_raw[index]),
                     "R_raw": float(case.r_raw[index]),
                     "delta_raw_percent": float(case.delta_raw[index]),
