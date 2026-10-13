@@ -53,6 +53,16 @@
   pointlike/.style={lowerbox,fill=pointcolor!14,draw=pointcolor!85!black},
   lowerpink/.style={lowerbox,fill=extendedcolor!10,draw=extendedcolor!80!black},
   final/.style={lowerbox,fill=ink,draw=ink,text=white,line width=1.0pt},
+  auxoutput/.style={
+    box,
+    fill=muted!12,
+    draw=muted,
+    line width=0.85pt,
+    minimum width=2.35cm,
+    minimum height=1.15cm,
+    text width=2.05cm,
+    font=\footnotesize
+  },
   outputmap/.style={lowerbox,fill=extendedcolor!10,draw=extendedcolor!80!black},
   smooth/.style={
     box,
@@ -140,10 +150,18 @@
   \node[final] (finalmap) at (3.05,-3.08)
     {Final \(J\)-factor\\template};
 
+  \node[auxoutput] (boost) at (0,-2.25)
+    {Boost factor for\\each repopulation};
+
   \draw[iobrace,decoration={brace,mirror,amplitude=3.5pt}]
     ([xshift=0.10cm,yshift=-0.08cm]catalogues.south west) --
     ([xshift=-0.10cm,yshift=-0.08cm]catalogues.south east)
     node[midway,below=5pt,iolabel] {INPUT - HDF5};
+
+  \draw[iobrace,decoration={brace,mirror,amplitude=3.5pt}]
+    ([xshift=0.10cm,yshift=-0.08cm]boost.south west) --
+    ([xshift=-0.10cm,yshift=-0.08cm]boost.south east)
+    node[midway,below=5pt,iolabel] {OUTPUT - CSV};
 
   \draw[iobrace]
     ([xshift=0.10cm,yshift=0.08cm]finalmap.north west) --
@@ -161,6 +179,8 @@
 
     \draw[auxflow] (catalogues.north) -- (renorm.south);
     \draw[auxflow] (renorm.east) -- ++(0.55,0) -| (raw.north);
+
+    \draw[auxflow] (catalogues.west) -- ++(-0.45,0) |- (boost.west);
 
     \draw[flow] (cuts.south) -- (pointmap.north);
 
