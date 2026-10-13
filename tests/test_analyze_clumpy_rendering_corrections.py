@@ -48,6 +48,13 @@ UNITS = [
     "kpc",
     "kpc",
 ]
+CATALOG_NAMES = [
+    "hydro_res_00001",
+    "hydro_res_00002",
+    "hydro_res_00003",
+    "hydro_res_00004",
+]
+LIST_NAMES = CATALOG_NAMES[:2]
 
 
 def write_list(path: Path, names: list[str], *, rhos_scale: float = 1.0) -> None:
@@ -92,6 +99,7 @@ def write_catalog(
     halo_name_count: int | None = None,
     columns: list[str] | None = None,
     units: list[str] | None = None,
+    chunk_rows: int = 2,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     columns = COLUMNS.copy() if columns is None else columns
@@ -103,7 +111,11 @@ def write_catalog(
         data[:, columns.index("theta_s")] = theta
     with h5py.File(path, "w") as handle:
         group = handle.create_group("iteration_0")
-        dataset = group.create_dataset("data", data=data)
+        dataset = group.create_dataset(
+            "data",
+            data=data,
+            chunks=(min(chunk_rows, len(names)), len(columns)),
+        )
         dataset.attrs["column_names"] = np.asarray(
             columns, dtype=h5py.string_dtype("utf-8")
         )
@@ -117,8 +129,45 @@ def write_catalog(
         group.create_dataset(
             "halo_name",
             data=np.asarray(stored_names, dtype=h5py.string_dtype("utf-8")),
+            chunks=(min(chunk_rows, count),),
         )
         group.attrs["n_saved"] = len(names) if n_saved is None else n_saved
+
+
+def write_sparse_catalog(
+    path: Path,
+    n_rows: int,
+    entries: dict[int, tuple[str, float, float]],
+    *,
+    chunk_rows: int = 128,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(path, "w") as handle:
+        group = handle.create_group("iteration_0")
+        data = group.create_dataset(
+            "data",
+            shape=(n_rows, len(COLUMNS)),
+            dtype=np.float64,
+            chunks=(chunk_rows, len(COLUMNS)),
+            fillvalue=1.0,
+        )
+        data.attrs["column_names"] = np.asarray(
+            COLUMNS, dtype=h5py.string_dtype("utf-8")
+        )
+        data.attrs["units"] = np.asarray(
+            UNITS, dtype=h5py.string_dtype("utf-8")
+        )
+        names = group.create_dataset(
+            "halo_name",
+            shape=(n_rows,),
+            dtype=h5py.string_dtype("utf-8"),
+            chunks=(chunk_rows,),
+        )
+        for row_index, (name, js, theta) in entries.items():
+            names[row_index] = name
+            data[row_index, COLUMNS.index("Js")] = js
+            data[row_index, COLUMNS.index("theta_s")] = theta
+        group.attrs["n_saved"] = n_rows
 
 
 def make_map_hdu(
@@ -179,10 +228,10 @@ def make_valid_case(
 ) -> tuple[Path, Path, diagnostic.CasePaths]:
     catalog_root = tmp_path / "catalogues"
     clumpy_root = tmp_path / "clumpy"
-    catalog_names = catalog_names or ["background_a", "halo_a", "halo_b", "background_b"]
-    list_names = list_names or ["halo_a", "halo_b"]
-    js = js or [5.0, 10.0, 20.0, 7.0]
-    theta = theta or [0.01, 0.20, 0.40, 0.02]
+    catalog_names = catalog_names or CATALOG_NAMES.copy()
+    list_names = list_names or LIST_NAMES.copy()
+    js = js or [10.0, 20.0, 5.0, 7.0]
+    theta = theta or [0.20, 0.40, 0.01, 0.02]
     raw_rendered = raw_rendered or [8.0, 24.0]
     corr_rendered = corr_rendered or [10.0, 20.0]
     paths = diagnostic.build_case_paths(
@@ -200,8 +249,6 @@ def make_valid_case(
 def validate(
     catalog_root: Path,
     clumpy_root: Path,
-    *,
-    chunk_size: int = 2,
 ) -> tuple[diagnostic.ValidationRecord, diagnostic.CaseData | None]:
     return diagnostic.validate_case(
         catalog_root,
@@ -209,7 +256,6 @@ def validate(
         SCENARIO,
         REPOP_ID,
         NSIDE,
-        chunk_size,
     )
 
 
@@ -237,14 +283,14 @@ def synthetic_case(
     )
 
 
-def test_valid_matching_chunked_lookup_and_ratios(tmp_path):
+def test_valid_matching_indexed_lookup_and_ratios(tmp_path):
     catalog_root, clumpy_root, _ = make_valid_case(tmp_path)
-    record, case = validate(catalog_root, clumpy_root, chunk_size=2)
+    record, case = validate(catalog_root, clumpy_root)
 
     assert record.usable
     assert record.n_matched == 2
     assert case is not None
-    assert case.names == ("halo_a", "halo_b")
+    assert case.names == tuple(LIST_NAMES)
     np.testing.assert_allclose(case.j_catalog, [10.0, 20.0])
     np.testing.assert_allclose(case.r_raw, [0.8, 1.2])
     np.testing.assert_allclose(case.r_corr, [1.0, 1.0])
@@ -256,7 +302,7 @@ def test_valid_matching_chunked_lookup_and_ratios(tmp_path):
 
 def test_zero_based_halo_index_is_required(tmp_path):
     catalog_root, clumpy_root, paths = make_valid_case(tmp_path)
-    write_log(paths.raw_log, ["halo_a", "halo_b"], [8.0, 24.0], indices=[1, 2])
+    write_log(paths.raw_log, LIST_NAMES, [8.0, 24.0], indices=[1, 2])
     record, case = validate(catalog_root, clumpy_root)
     assert not record.usable
     assert case is None
@@ -267,29 +313,38 @@ def test_zero_based_halo_index_is_required(tmp_path):
 def test_duplicate_names_are_rejected(tmp_path, target):
     catalog_root, clumpy_root, paths = make_valid_case(tmp_path)
     if target == "raw_list":
-        write_list(paths.raw_list, ["halo_a", "halo_a"])
+        write_list(paths.raw_list, [LIST_NAMES[0], LIST_NAMES[0]])
     elif target == "raw_log":
-        write_log(paths.raw_log, ["halo_a", "halo_a"], [8.0, 24.0])
+        write_log(paths.raw_log, [LIST_NAMES[0], LIST_NAMES[0]], [8.0, 24.0])
     else:
-        write_log(paths.corrected_log, ["halo_a", "halo_a"], [10.0, 20.0])
+        write_log(
+            paths.corrected_log,
+            [LIST_NAMES[0], LIST_NAMES[0]],
+            [10.0, 20.0],
+        )
     record, _ = validate(catalog_root, clumpy_root)
     assert not record.usable
     assert "duplicate NAME" in record.exclusion_reason
 
 
-def test_missing_hdf5_name_is_rejected(tmp_path):
+def test_stored_hdf5_name_mismatch_is_rejected(tmp_path):
     catalog_root, clumpy_root, _ = make_valid_case(
         tmp_path,
-        catalog_names=["background_a", "halo_a", "not_halo_b", "background_b"],
+        catalog_names=[
+            "hydro_res_00001",
+            "not_hydro_res_00002",
+            "hydro_res_00003",
+            "hydro_res_00004",
+        ],
     )
     record, _ = validate(catalog_root, clumpy_root)
     assert not record.usable
-    assert "missing from HDF5" in record.exclusion_reason
+    assert "HDF5 NAME mismatch at inferred row 1" in record.exclusion_reason
 
 
 def test_reordered_corrected_list_is_rejected(tmp_path):
     catalog_root, clumpy_root, paths = make_valid_case(tmp_path)
-    write_list(paths.corrected_list, ["halo_b", "halo_a"])
+    write_list(paths.corrected_list, list(reversed(LIST_NAMES)))
     record, _ = validate(catalog_root, clumpy_root)
     assert not record.usable
     assert "differs from raw list" in record.exclusion_reason
@@ -299,7 +354,7 @@ def test_reordered_corrected_list_is_rejected(tmp_path):
 def test_partial_logs_are_rejected(tmp_path, stage):
     catalog_root, clumpy_root, paths = make_valid_case(tmp_path)
     target = paths.raw_log if stage == "raw" else paths.corrected_log
-    write_log(target, ["halo_a"], [10.0])
+    write_log(target, [LIST_NAMES[0]], [10.0])
     record, _ = validate(catalog_root, clumpy_root)
     assert not record.usable
     assert "row-count mismatch" in record.exclusion_reason
@@ -309,7 +364,7 @@ def test_malformed_rendered_log_row_is_rejected(tmp_path):
     catalog_root, clumpy_root, paths = make_valid_case(tmp_path)
     write_log(
         paths.raw_log,
-        ["halo_a", "halo_b"],
+        LIST_NAMES,
         [8.0, 24.0],
         malformed_line="2 only three fields",
     )
@@ -507,9 +562,9 @@ def test_hdf5_n_saved_mismatch_is_rejected(tmp_path):
     catalog_root, clumpy_root, paths = make_valid_case(tmp_path)
     write_catalog(
         paths.catalog,
-        ["background_a", "halo_a", "halo_b", "background_b"],
-        [5.0, 10.0, 20.0, 7.0],
-        [0.01, 0.2, 0.4, 0.02],
+        CATALOG_NAMES,
+        [10.0, 20.0, 5.0, 7.0],
+        [0.2, 0.4, 0.01, 0.02],
         n_saved=99,
     )
     record, _ = validate(catalog_root, clumpy_root)
@@ -521,9 +576,9 @@ def test_hdf5_halo_name_length_mismatch_is_rejected(tmp_path):
     catalog_root, clumpy_root, paths = make_valid_case(tmp_path)
     write_catalog(
         paths.catalog,
-        ["background_a", "halo_a", "halo_b", "background_b"],
-        [5.0, 10.0, 20.0, 7.0],
-        [0.01, 0.2, 0.4, 0.02],
+        CATALOG_NAMES,
+        [10.0, 20.0, 5.0, 7.0],
+        [0.2, 0.4, 0.01, 0.02],
         halo_name_count=3,
     )
     record, _ = validate(catalog_root, clumpy_root)
@@ -552,9 +607,9 @@ def test_hdf5_missing_or_wrong_units_are_rejected(tmp_path, mutation, message):
         units[columns.index("theta_s")] = "rad"
     write_catalog(
         paths.catalog,
-        ["background_a", "halo_a", "halo_b", "background_b"],
-        [5.0, 10.0, 20.0, 7.0],
-        [0.01, 0.2, 0.4, 0.02],
+        CATALOG_NAMES,
+        [10.0, 20.0, 5.0, 7.0],
+        [0.2, 0.4, 0.01, 0.02],
         columns=columns,
         units=units,
     )
@@ -572,17 +627,121 @@ def test_hdf5_missing_units_metadata_is_rejected(tmp_path):
     assert "Missing column_names or units metadata" in record.exclusion_reason
 
 
-def test_chunked_lookup_finds_targets_on_chunk_boundaries(tmp_path):
-    catalog_root, clumpy_root, _ = make_valid_case(
-        tmp_path,
-        catalog_names=["a", "b", "halo_a", "halo_b", "e", "f"],
-        js=[1.0, 2.0, 30.0, 40.0, 5.0, 6.0],
-        theta=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+def test_indexed_lookup_maps_first_two_names_to_rows_zero_and_one(tmp_path):
+    path = tmp_path / "catalog.h5"
+    write_catalog(
+        path,
+        CATALOG_NAMES,
+        [11.0, 22.0, 33.0, 44.0],
+        [0.11, 0.22, 0.33, 0.44],
     )
-    record, case = validate(catalog_root, clumpy_root, chunk_size=3)
-    assert record.usable
-    assert case is not None
-    np.testing.assert_allclose(case.j_catalog, [30.0, 40.0])
+
+    js, theta = diagnostic.load_catalog_values_indexed(path, LIST_NAMES)
+
+    np.testing.assert_allclose(js, [11.0, 22.0])
+    np.testing.assert_allclose(theta, [0.11, 0.22])
+
+
+def test_indexed_lookup_accepts_suffix_above_five_digits(tmp_path):
+    path = tmp_path / "large_sparse_catalog.h5"
+    write_sparse_catalog(
+        path,
+        100_000,
+        {99_999: ("hydro_res_100000", 42.0, 0.75)},
+    )
+
+    js, theta = diagnostic.load_catalog_values_indexed(
+        path, ["hydro_res_100000"]
+    )
+
+    np.testing.assert_allclose(js, [42.0])
+    np.testing.assert_allclose(theta, [0.75])
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["halo_a", "hydro_frag_00001", "hydro_res_1x", "hydro_res_-1"],
+)
+def test_indexed_lookup_rejects_malformed_names(tmp_path, name):
+    path = tmp_path / "catalog.h5"
+    write_catalog(path, CATALOG_NAMES, [1.0] * 4, [0.1] * 4)
+
+    with pytest.raises(
+        diagnostic.ProductValidationError,
+        match="Non-canonical halo NAME",
+    ):
+        diagnostic.load_catalog_values_indexed(path, [name])
+
+
+def test_indexed_lookup_rejects_zero_suffix(tmp_path):
+    path = tmp_path / "catalog.h5"
+    write_catalog(path, CATALOG_NAMES, [1.0] * 4, [0.1] * 4)
+
+    with pytest.raises(
+        diagnostic.ProductValidationError,
+        match="Non-canonical halo NAME",
+    ):
+        diagnostic.load_catalog_values_indexed(path, ["hydro_res_00000"])
+
+
+def test_indexed_lookup_rejects_row_outside_catalog(tmp_path):
+    path = tmp_path / "catalog.h5"
+    write_catalog(path, CATALOG_NAMES, [1.0] * 4, [0.1] * 4)
+
+    with pytest.raises(
+        diagnostic.ProductValidationError,
+        match="outside valid range 0..3",
+    ):
+        diagnostic.load_catalog_values_indexed(path, ["hydro_res_00005"])
+
+
+def test_indexed_lookup_rejects_duplicate_inferred_rows(tmp_path):
+    path = tmp_path / "catalog.h5"
+    write_catalog(path, CATALOG_NAMES, [1.0] * 4, [0.1] * 4)
+
+    with pytest.raises(
+        diagnostic.ProductValidationError,
+        match="Duplicate inferred HDF5 row 0",
+    ):
+        diagnostic.load_catalog_values_indexed(
+            path, ["hydro_res_00001", "hydro_res_1"]
+        )
+
+
+def test_indexed_lookup_restores_unsorted_list_order_for_separated_rows(
+    tmp_path,
+    monkeypatch,
+):
+    path = tmp_path / "catalog.h5"
+    names = [f"hydro_res_{index:05d}" for index in range(1, 9)]
+    write_catalog(
+        path,
+        names,
+        [float(index) for index in range(1, 9)],
+        [float(index) / 10.0 for index in range(1, 9)],
+        chunk_rows=2,
+    )
+    decoded_halo_names = 0
+    original_decode = diagnostic._decode_strings
+
+    def recording_decode(values):
+        nonlocal decoded_halo_names
+        decoded = original_decode(values)
+        if decoded and all(
+            value.startswith("hydro_res_") for value in decoded
+        ):
+            decoded_halo_names += len(decoded)
+        return decoded
+
+    monkeypatch.setattr(diagnostic, "_decode_strings", recording_decode)
+    requested = ["hydro_res_00008", "hydro_res_00001"]
+
+    js, theta = diagnostic.load_catalog_values_indexed(path, requested)
+
+    np.testing.assert_allclose(js, [8.0, 1.0])
+    np.testing.assert_allclose(theta, [0.8, 0.1])
+    assert decoded_halo_names == 2
+    assert decoded_halo_names < len(names)
 
 
 def test_per_repopulation_summary_exact_equality_and_strict_fractions():
@@ -654,10 +813,27 @@ def test_empirical_cdf_on_common_grid_includes_zero_residuals():
     np.testing.assert_array_equal(count, [2, 2, 2, 2])
 
 
-def test_validate_only_reports_exclusion_and_writes_nothing(tmp_path, capsys):
+def test_validate_only_uses_indexed_lookup_and_writes_nothing(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
     catalog_root, clumpy_root, paths = make_valid_case(tmp_path)
     paths.total_fits.unlink()
     output_dir = tmp_path / "must_not_exist"
+    decoded_halo_names = 0
+    original_decode = diagnostic._decode_strings
+
+    def recording_decode(values):
+        nonlocal decoded_halo_names
+        decoded = original_decode(values)
+        if decoded and all(
+            value.startswith("hydro_res_") for value in decoded
+        ):
+            decoded_halo_names += len(decoded)
+        return decoded
+
+    monkeypatch.setattr(diagnostic, "_decode_strings", recording_decode)
     status = diagnostic.main(
         [
             "--catalog-root",
@@ -670,8 +846,6 @@ def test_validate_only_reports_exclusion_and_writes_nothing(tmp_path, capsys):
             str(REPOP_ID),
             "--nside",
             str(NSIDE),
-            "--chunk-size",
-            "2",
             "--output-dir",
             str(output_dir),
             "--validate-only",
@@ -681,8 +855,12 @@ def test_validate_only_reports_exclusion_and_writes_nothing(tmp_path, capsys):
     assert status == 1
     assert "scenario=fragile" in output
     assert "total_fits_valid=no" in output
+    assert "hdf5_matching=yes" in output
+    assert "n_matched=2" in output
     assert "usable=no" in output
     assert "exclusion_reason=" in output
+    assert decoded_halo_names == 2
+    assert decoded_halo_names < len(CATALOG_NAMES)
     assert not (output_dir / "matched_halo_diagnostics.csv").exists()
     assert not output_dir.exists()
 
@@ -766,8 +944,6 @@ def test_full_analysis_writes_required_outputs(tmp_path, monkeypatch):
             str(REPOP_ID),
             "--nside",
             str(NSIDE),
-            "--chunk-size",
-            "2",
             "--x-bins",
             "3",
             "--cdf-points",
@@ -813,8 +989,6 @@ def test_matched_halo_csv_schema_values_and_order(tmp_path, monkeypatch):
             str(REPOP_ID),
             "--nside",
             str(NSIDE),
-            "--chunk-size",
-            "2",
             "--x-bins",
             "3",
             "--cdf-points",
@@ -845,7 +1019,7 @@ def test_matched_halo_csv_schema_values_and_order(tmp_path, monkeypatch):
         ]
         rows = list(reader)
 
-    assert [row["halo_name"] for row in rows] == ["halo_a", "halo_b"]
+    assert [row["halo_name"] for row in rows] == LIST_NAMES
     assert [row["scenario"] for row in rows] == [SCENARIO, SCENARIO]
     assert [int(row["repop_id"]) for row in rows] == [REPOP_ID, REPOP_ID]
 

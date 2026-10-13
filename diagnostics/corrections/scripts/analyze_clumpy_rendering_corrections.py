@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,9 +32,9 @@ SCENARIO_COLORS = {
     "resilient": "#009988",
 }
 DEFAULT_NSIDE = 2048
-DEFAULT_CHUNK_SIZE = 1_000_000
 DEFAULT_X_BINS = 24
 DEFAULT_CDF_POINTS = 512
+HALO_NAME_PATTERN = re.compile(r"^hydro_res_(0*[1-9][0-9]*)$")
 LOG_HEADER = (
     "HALO_INDEX",
     "NAME",
@@ -153,7 +154,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Exclusive end of the range selected with --start-id.",
     )
     parser.add_argument("--nside", type=int, default=DEFAULT_NSIDE)
-    parser.add_argument("--chunk-size", type=int, default=DEFAULT_CHUNK_SIZE)
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -199,8 +199,6 @@ def parse_repop_ids(args: argparse.Namespace) -> list[int]:
 def validate_cli_args(args: argparse.Namespace) -> None:
     if args.nside <= 0 or (args.nside & (args.nside - 1)) != 0:
         raise ValueError("--nside must be a positive power of two.")
-    if args.chunk_size <= 0:
-        raise ValueError("--chunk-size must be positive.")
     if args.x_bins <= 0:
         raise ValueError("--x-bins must be positive.")
     if args.cdf_points < 2:
@@ -589,68 +587,70 @@ def validate_catalog_metadata(path: Path) -> None:
         ) from error
 
 
-def load_catalog_values_chunked(
+def load_catalog_values_indexed(
     path: Path,
     target_names: Sequence[str],
-    chunk_size: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return catalog Js/theta_s in target order without full-table reads."""
+    """Return targeted catalog Js/theta_s in the requested NAME order."""
     _require_nonempty_file(path, "HDF5 catalogue")
-    if len(target_names) != len(set(target_names)):
-        raise ProductValidationError("Target list names are not unique")
-    target_set = set(target_names)
-    found: dict[str, tuple[float, float]] = {}
 
     try:
         with h5py.File(path, "r") as handle:
             data, names, js_index, theta_index = _catalog_layout(handle, path)
 
-            for start in range(0, data.shape[0], chunk_size):
-                stop = min(start + chunk_size, data.shape[0])
-                name_chunk = _decode_strings(names[start:stop])
-                matching_local = [
-                    index
-                    for index, name in enumerate(name_chunk)
-                    if name in target_set
-                ]
-                if not matching_local:
-                    continue
-                matching_rows = np.asarray(
-                    [start + index for index in matching_local],
-                    dtype=np.int64,
-                )
-                matched_js = np.asarray(
-                    data[matching_rows, js_index], dtype=np.float64
-                )
-                matched_theta = np.asarray(
-                    data[matching_rows, theta_index], dtype=np.float64
-                )
-                for offset, local_index in enumerate(matching_local):
-                    name = name_chunk[local_index]
-                    if name in found:
-                        raise ProductValidationError(
-                            f"HDF5 target NAME occurs more than once: {name!r}"
-                        )
-                    found[name] = (
-                        float(matched_js[offset]),
-                        float(matched_theta[offset]),
+            inferred_rows: list[int] = []
+            row_to_name: dict[int, str] = {}
+            for name in target_names:
+                match = HALO_NAME_PATTERN.fullmatch(name)
+                if match is None:
+                    raise ProductValidationError(
+                        f"Non-canonical halo NAME {name!r}; expected "
+                        "hydro_res_<positive numeric suffix>"
+                    )
+                row_index = int(match.group(1)) - 1
+                if row_index < 0 or row_index >= data.shape[0]:
+                    raise ProductValidationError(
+                        f"Halo NAME {name!r} implies HDF5 row {row_index}, "
+                        f"outside valid range 0..{data.shape[0] - 1}"
+                    )
+                if row_index in row_to_name:
+                    raise ProductValidationError(
+                        f"Duplicate inferred HDF5 row {row_index} for halo NAMEs "
+                        f"{row_to_name[row_index]!r} and {name!r}"
+                    )
+                row_to_name[row_index] = name
+                inferred_rows.append(row_index)
+
+            rows = np.asarray(inferred_rows, dtype=np.int64)
+            sort_order = np.argsort(rows, kind="stable")
+            sorted_rows = rows[sort_order]
+            sorted_names = [target_names[index] for index in sort_order]
+            stored_names = _decode_strings(names[sorted_rows])
+            sorted_js = np.asarray(
+                data[sorted_rows, js_index], dtype=np.float64
+            )
+            sorted_theta = np.asarray(
+                data[sorted_rows, theta_index], dtype=np.float64
+            )
+
+            for sorted_position, (stored_name, expected_name) in enumerate(
+                zip(stored_names, sorted_names)
+            ):
+                if stored_name != expected_name:
+                    raise ProductValidationError(
+                        f"HDF5 NAME mismatch at inferred row "
+                        f"{int(sorted_rows[sorted_position])}: "
+                        f"expected {expected_name!r}, found {stored_name!r}"
                     )
     except ProductValidationError:
         raise
     except OSError as error:
         raise ProductValidationError(f"Could not open HDF5 catalogue {path}: {error}") from error
 
-    missing_targets = [name for name in target_names if name not in found]
-    if missing_targets:
-        preview = ", ".join(repr(name) for name in missing_targets[:5])
-        suffix = "" if len(missing_targets) <= 5 else ", ..."
-        raise ProductValidationError(
-            f"{len(missing_targets)} list NAME value(s) missing from HDF5: "
-            f"{preview}{suffix}"
-        )
-
-    js = np.asarray([found[name][0] for name in target_names], dtype=np.float64)
-    theta = np.asarray([found[name][1] for name in target_names], dtype=np.float64)
+    js = np.empty(len(sorted_js), dtype=np.float64)
+    theta = np.empty(len(sorted_theta), dtype=np.float64)
+    js[sort_order] = sorted_js
+    theta[sort_order] = sorted_theta
     invalid_js = ~np.isfinite(js) | (js <= 0.0)
     invalid_theta = ~np.isfinite(theta) | (theta <= 0.0)
     if np.any(invalid_js):
@@ -677,7 +677,6 @@ def validate_case(
     scenario: str,
     repop_id: int,
     nside: int,
-    chunk_size: int,
 ) -> tuple[ValidationRecord, CaseData | None]:
     paths = build_case_paths(
         catalog_root, clumpy_root, scenario, repop_id, nside
@@ -768,12 +767,12 @@ def validate_case(
     theta_s: np.ndarray | None = None
     if raw_list is not None:
         try:
-            j_catalog, theta_s = load_catalog_values_chunked(
+            j_catalog, theta_s = load_catalog_values_indexed(
                 paths.catalog,
                 [row.name for row in raw_list],
-                chunk_size,
             )
             record.hdf5_matching_valid = True
+            record.n_matched = len(raw_list)
         except ProductValidationError as error:
             record.reasons.append(str(error))
     elif not record.catalog_found:
@@ -1282,7 +1281,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 scenario=scenario,
                 repop_id=repop_id,
                 nside=args.nside,
-                chunk_size=args.chunk_size,
             )
             records.append(record)
             print_validation_record(record)
