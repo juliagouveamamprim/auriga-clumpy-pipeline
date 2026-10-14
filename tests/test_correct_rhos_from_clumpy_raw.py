@@ -238,4 +238,3 @@ def test_validate_only_performs_matching_without_writing_outputs(
 
     assert not output_dir.exists()
     assert not output_list.exists()
-
