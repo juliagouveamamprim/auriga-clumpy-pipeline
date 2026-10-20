@@ -92,3 +92,53 @@ default:
 
 Diagnostic CSVs and figures are generated products and should not be
 committed.
+
+## Coarse all-sky subhalo-to-smooth ratio
+
+`scripts/map_coarse_subhalo_to_smooth.py` preserves the two-dimensional sky
+dependence by aggregating the final integrated-J maps into coarser NESTED
+HEALPix pixels. For every diagnostic pixel `b`, it computes
+
+    J_smooth,b = sum_b Jsmooth
+    J_sub,b = sum_b (Jpointlike + Jextended_occ)
+    R_b = J_sub,b / J_smooth,b.
+
+`Jextended_occ` differs from `Jextended` only where the latter is exactly the
+float32 CLUMPY empty-Jlist sentinel `np.float32(1e-40)`; those values become
+zero. No threshold is applied to other positive values. The ratio is formed
+only after the two components have been summed, and `hp.ud_grade` is not used.
+
+The reader validates the `JFACTOR` table and streams it once in chunks. For a
+NESTED input map, fine pixel `p` belongs to coarse pixel
+
+    p // (NSIDE_input / NSIDE_diag)^2.
+
+Both components are accumulated independently in float64, and their global
+fine/coarse sums must agree. A non-positive coarse `Jsmooth` is an error. At
+diagnostic NSIDE=16, a zero-substructure pixel means that the aggregated
+substructure contribution in the generated map is zero, not that its FITS
+data are missing or invalid. For positive `J_smooth`, such a pixel has `R=0`
+and therefore no finite `log10(R)`; the plotting routine masks it instead of
+assigning an artificial finite value.
+
+For illustrative fragile/resilient comparisons, matched repopulation IDs
+were selected only when both scenarios had zero empty coarse pixels. Of the
+31 matched pairs examined, 17 met this occupancy criterion. This selection is
+intended for visualization and is not an unbiased or statistically
+representative subset of the full repopulation ensemble.
+
+Run the initial matched example from the repository root with:
+
+    python3 -u diagnostics/maps/scripts/map_coarse_subhalo_to_smooth.py \
+        --repop-id 0 \
+        --input-nside 2048 \
+        --diag-nside 16
+
+By default this reads the fragile and resilient final maps under
+`outputs/clumpy`, then writes a shared-scale two-panel Galactic Mollweide
+figure (PNG and PDF) and a numerical summary CSV under
+
+    outputs/diagnostics/maps/coarse_subhalo_to_smooth/repop_0000/
+
+Use `--fragile-map` and `--resilient-map` to override either input, and
+`--output-dir`, `--formats`, or `--basename` to configure generated products.
