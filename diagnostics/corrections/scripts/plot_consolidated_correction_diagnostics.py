@@ -259,9 +259,9 @@ def common_histogram_edges(
 
 
 def normalized_histogram(values: np.ndarray, edges: np.ndarray) -> np.ndarray:
-    """Return a probability density whose bin integrals sum to one."""
-    density, _ = np.histogram(values, bins=edges, density=True)
-    return density
+    """Return the fraction of scenario halos in each bin."""
+    counts, _ = np.histogram(values, bins=edges)
+    return counts.astype(np.float64) / values.size
 
 
 def common_theta_edges(
@@ -416,9 +416,9 @@ def make_distribution_figure(
         }
         edges = common_histogram_edges(list(values_by_scenario.values()))
         for scenario in SCENARIOS:
-            density = normalized_histogram(values_by_scenario[scenario], edges)
+            fractions = normalized_histogram(values_by_scenario[scenario], edges)
             axis.stairs(
-                density,
+                fractions,
                 edges,
                 color=SCENARIO_COLORS[scenario],
                 linestyle=SCENARIO_LINESTYLES[scenario],
@@ -427,8 +427,12 @@ def make_distribution_figure(
             )
         axis.axvline(0.0, color="0.4", linestyle=":", linewidth=1.2)
         axis.set_xlim(edges[0], edges[-1])
-        axis.set_xlabel(r"$\log_{10}(J_{\rm rendered}/J_s)$")
-        axis.set_ylabel("Probability density")
+        axis.set_xlabel(
+            r"$\log_{10}(J_{\rm raw}/J_s)$"
+            if stage == "raw"
+            else r"$\log_{10}(J_{\rm corr}/J_s)$"
+        )
+        axis.set_ylabel("Fraction of halos")
         axis.set_title("Raw" if stage == "raw" else "Corrected")
         _finish_axis(axis)
     return _save_figure(
@@ -479,7 +483,11 @@ def make_theta_figure(
         axis.set_xscale("log")
         axis.set_xlim(edges[0], edges[-1])
         axis.set_xlabel(r"$\theta_s\;[\mathrm{deg}]$")
-        axis.set_ylabel(r"$\log_{10}(J_{\rm rendered}/J_s)$")
+        axis.set_ylabel(
+            r"$\log_{10}(J_{\rm raw}/J_s)$"
+            if stage == "raw"
+            else r"$\log_{10}(J_{\rm corr}/J_s)$"
+        )
         axis.set_title("Raw" if stage == "raw" else "Corrected")
         _finish_axis(axis)
     figure.text(

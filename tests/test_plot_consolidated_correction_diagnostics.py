@@ -257,12 +257,57 @@ def test_histograms_are_normalized_independently_for_unequal_samples():
     fragile = np.asarray([-0.5, 0.5])
     resilient = np.full(1000, 0.5)
 
-    fragile_density = diagnostic.normalized_histogram(fragile, edges)
-    resilient_density = diagnostic.normalized_histogram(resilient, edges)
+    fragile_fractions = diagnostic.normalized_histogram(fragile, edges)
+    resilient_fractions = diagnostic.normalized_histogram(resilient, edges)
 
-    widths = np.diff(edges)
-    assert np.sum(fragile_density * widths) == pytest.approx(1.0)
-    assert np.sum(resilient_density * widths) == pytest.approx(1.0)
+    np.testing.assert_allclose(fragile_fractions, [0.5, 0.5])
+    np.testing.assert_allclose(resilient_fractions, [0.0, 1.0])
+    assert np.sum(fragile_fractions) == pytest.approx(1.0)
+    assert np.sum(resilient_fractions) == pytest.approx(1.0)
+
+
+def test_distribution_figure_labels_fraction_and_stage_specific_ratios(
+    tmp_path, monkeypatch
+):
+    data = load_pair(tmp_path)
+    captured = {}
+
+    def capture_figure(figure, output_dir, stem, formats):
+        captured["figure"] = figure
+        return []
+
+    monkeypatch.setattr(diagnostic, "_save_figure", capture_figure)
+    diagnostic.make_distribution_figure(data, tmp_path, ("png",))
+    figure = captured["figure"]
+    try:
+        assert [axis.get_ylabel() for axis in figure.axes] == [
+            "Fraction of halos",
+            "Fraction of halos",
+        ]
+        assert [axis.get_xlabel() for axis in figure.axes] == [
+            r"$\log_{10}(J_{\rm raw}/J_s)$",
+            r"$\log_{10}(J_{\rm corr}/J_s)$",
+        ]
+    finally:
+        diagnostic.plt.close(figure)
+
+
+def test_normalized_histogram_does_not_request_density(monkeypatch):
+    original_histogram = diagnostic.np.histogram
+    calls = []
+
+    def tracked_histogram(*args, **kwargs):
+        calls.append(kwargs.copy())
+        return original_histogram(*args, **kwargs)
+
+    monkeypatch.setattr(diagnostic.np, "histogram", tracked_histogram)
+    fractions = diagnostic.normalized_histogram(
+        np.asarray([-0.5, 0.5]), np.asarray([-1.0, 0.0, 1.0])
+    )
+
+    np.testing.assert_allclose(fractions, [0.5, 0.5])
+    assert len(calls) == 1
+    assert calls[0].get("density", False) is False
 
 
 def test_histogram_range_includes_equality_reference():
