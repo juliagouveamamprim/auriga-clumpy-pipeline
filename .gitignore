@@ -31,6 +31,7 @@ progress_*.txt
 figures/
 diagnostics/cuts/plots/
 diagnostics/cuts/results_summary/
+diagnostics/corrections/data/*.csv
 
 # Temporary and editor files
 *.tmp
