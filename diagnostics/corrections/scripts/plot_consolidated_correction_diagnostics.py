@@ -490,13 +490,6 @@ def make_theta_figure(
         )
         axis.set_title("Raw" if stage == "raw" else "Corrected")
         _finish_axis(axis)
-    figure.text(
-        0.5,
-        -0.015,
-        "Shaded bands show the 16th–84th percentile halo-to-halo dispersion.",
-        ha="center",
-        fontsize=11,
-    )
     return _save_figure(
         figure,
         output_dir,
