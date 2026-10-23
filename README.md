@@ -435,6 +435,33 @@ The wrapper performs seven sequential steps:
 6. Run corrected CLUMPY.
 7. Combine the corrected and pointlike maps.
 
+#### Optional raw FITS cleanup
+
+Raw-map cleanup is disabled by default. Enable it explicitly for a one-case
+run with:
+
+```bash
+bash scripts/run_clumpy_one_case.sh 0 resilient --cleanup-raw-fits
+```
+
+After the complete one-case pipeline finishes successfully, this removes only:
+
+```text
+outputs/clumpy/<scenario>/outputs/raw_clumpy/repop_XXXX_nside<NSIDE>/
+    annihil_gal2D_LOS0_0_FOV360x180_nside<NSIDE>.fits
+```
+
+The raw halo-rendered log, CLUMPY stdout/stderr log, lists, parameter files,
+correction diagnostics, corrected products, pointlike map, and final total map
+are preserved. The option is also supported with `--from-correction` and
+`--from-correction --discard-stale-downstream`; cleanup is idempotent when the
+raw FITS is already absent.
+
+Removing this file does not affect correction or downstream regeneration, but
+it discards the pixel-level raw map. Recovering that diagnostic artifact later
+requires rerunning raw CLUMPY with the retained inputs and a compatible CLUMPY
+build.
+
 #### Resume and overwrite behavior
 
 - If the final total FITS already exists and is non-empty, the wrapper stops
@@ -470,6 +497,16 @@ start_id  end_id  resilient|fragile|both  max_jobs
 ```
 
 The wrapper verifies all required HDF5 catalogs before launching jobs, writes one log per case, and skips cases whose final total FITS already exists.
+
+Pass `--cleanup-raw-fits` to propagate the opt-in cleanup to every launched
+case:
+
+```bash
+bash scripts/run_clumpy_batch.sh 160 179 both 8 --cleanup-raw-fits
+```
+
+Cases skipped by `SKIP_COMPLETED=1` are not launched and are not retroactively
+cleaned.
 
 When `both` is selected, `max_jobs` is the total number of simultaneous cases across both scenarios.
 

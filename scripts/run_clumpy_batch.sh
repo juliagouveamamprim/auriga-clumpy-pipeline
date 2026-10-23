@@ -5,7 +5,7 @@ usage() {
     cat <<'EOF'
 Usage:
   bash scripts/run_clumpy_batch.sh <start_id> <end_id> <scenario> [max_jobs]
-      [--from-correction] [--discard-stale-downstream]
+      [--from-correction] [--discard-stale-downstream] [--cleanup-raw-fits]
 
 Arguments:
   start_id    First repopulation ID, inclusive
@@ -17,6 +17,9 @@ Arguments:
   --discard-stale-downstream
               With --from-correction, delete validated stale downstream
               products instead of archiving them
+  --cleanup-raw-fits
+              Delete only the primary raw CLUMPY FITS after successful pipeline
+              completion (default: disabled)
 
 Environment variables:
   POLL_SECONDS          Seconds between concurrency checks (default: 60)
@@ -37,7 +40,7 @@ Examples:
 EOF
 }
 
-if [[ $# -lt 3 || $# -gt 6 ]]; then
+if [[ $# -lt 3 || $# -gt 7 ]]; then
     usage
     exit 2
 fi
@@ -49,6 +52,7 @@ MAX_JOBS=8
 FROM_CORRECTION=0
 MAX_JOBS_SET=0
 DISCARD_STALE_DOWNSTREAM=0
+CLEANUP_RAW_FITS=0
 for argument in "${@:4}"; do
     case "${argument}" in
         --from-correction)
@@ -64,6 +68,13 @@ for argument in "${@:4}"; do
                 exit 2
             fi
             DISCARD_STALE_DOWNSTREAM=1
+            ;;
+        --cleanup-raw-fits)
+            if [[ "${CLEANUP_RAW_FITS}" == "1" ]]; then
+                echo "ERROR: duplicate option: ${argument}" >&2
+                exit 2
+            fi
+            CLEANUP_RAW_FITS=1
             ;;
         *)
             if [[ "${MAX_JOBS_SET}" == "1" ]]; then
@@ -169,6 +180,7 @@ echo "Launch delay:     ${LAUNCH_DELAY_SECONDS} s"
 echo "Skip completed:   ${SKIP_COMPLETED}"
 echo "From correction:  ${FROM_CORRECTION}"
 echo "Discard stale:    ${DISCARD_STALE_DOWNSTREAM}"
+echo "Cleanup raw FITS: ${CLEANUP_RAW_FITS}"
 echo "Catalogue root:   ${CATALOG_ROOT}"
 echo "NSIDE:            ${NSIDE}"
 echo "Cuts:"
@@ -235,19 +247,17 @@ launch_case() {
         echo "================================================================================"
         echo
 
+        ONE_CASE_ARGS=("${repop_id}" "${scenario}")
         if [[ "${FROM_CORRECTION}" == "1" ]]; then
-            ONE_CASE_ARGS=(
-                "${repop_id}"
-                "${scenario}"
-                "--from-correction"
-            )
+            ONE_CASE_ARGS+=("--from-correction")
             if [[ "${DISCARD_STALE_DOWNSTREAM}" == "1" ]]; then
                 ONE_CASE_ARGS+=("--discard-stale-downstream")
             fi
-            bash "${ONE_CASE_SCRIPT}" "${ONE_CASE_ARGS[@]}"
-        else
-            bash "${ONE_CASE_SCRIPT}" "${repop_id}" "${scenario}"
         fi
+        if [[ "${CLEANUP_RAW_FITS}" == "1" ]]; then
+            ONE_CASE_ARGS+=("--cleanup-raw-fits")
+        fi
+        bash "${ONE_CASE_SCRIPT}" "${ONE_CASE_ARGS[@]}"
         status=$?
 
         echo

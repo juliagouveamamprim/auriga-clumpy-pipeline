@@ -8,7 +8,7 @@ set -euo pipefail
 # Usage:
 #
 #   bash scripts/run_clumpy_one_case.sh <repop_id> <scenario> [--from-correction]
-#       [--discard-stale-downstream]
+#       [--discard-stale-downstream] [--cleanup-raw-fits]
 #
 # Examples:
 #
@@ -30,9 +30,9 @@ set -euo pipefail
 #   - plot_extended.py
 # ============================================================
 
-if [ "$#" -lt 2 ] || [ "$#" -gt 4 ]; then
+if [ "$#" -lt 2 ] || [ "$#" -gt 5 ]; then
     echo "Usage:"
-    echo "  bash $0 <repop_id> <scenario> [--from-correction] [--discard-stale-downstream]"
+    echo "  bash $0 <repop_id> <scenario> [--from-correction] [--discard-stale-downstream] [--cleanup-raw-fits]"
     echo
     echo "Examples:"
     echo "  bash $0 1 resilient"
@@ -44,6 +44,7 @@ REPOP_ID="$1"
 SCENARIO="$2"
 RUN_MODE="normal"
 DISCARD_STALE_DOWNSTREAM=0
+CLEANUP_RAW_FITS=0
 for option in "${@:3}"; do
     case "${option}" in
         --from-correction)
@@ -59,6 +60,13 @@ for option in "${@:3}"; do
                 exit 2
             fi
             DISCARD_STALE_DOWNSTREAM=1
+            ;;
+        --cleanup-raw-fits)
+            if [ "${CLEANUP_RAW_FITS}" = "1" ]; then
+                echo "ERROR: duplicate option: ${option}" >&2
+                exit 2
+            fi
+            CLEANUP_RAW_FITS=1
             ;;
         *)
             echo "ERROR: unknown mode: ${option}" >&2
@@ -177,6 +185,7 @@ CORRECTED_CLUMPY_LOG="${CASE_DIR}/logs/corrected_clumpy/${REPOP_TAG}_corrected_c
 RAW_OUTPUT_DIR="${CASE_DIR}/outputs/raw_clumpy/${REPOP_RUN_TAG}"
 CORRECTED_OUTPUT_DIR="${CASE_DIR}/outputs/corrected_clumpy/${REPOP_RUN_TAG}"
 
+RAW_FITS="${RAW_OUTPUT_DIR}/${CLUMPY_BASENAME}.fits"
 RAW_RENDERED_LOG="${RAW_OUTPUT_DIR}/${CLUMPY_BASENAME}.halo_rendered.log"
 CORRECTED_RENDERED_LOG="${CORRECTED_OUTPUT_DIR}/${CLUMPY_BASENAME}.halo_rendered.log"
 
@@ -186,6 +195,69 @@ TOTAL_FITS="${TOTAL_OUTPUT_DIR}/auriga_total_nside${NSIDE}.fits"
 CATALOG_H5="${CATALOG_ROOT}/${REPOP_TAG}/fullrepop_hydro_${SCENARIO}.h5"
 CORRECTED_LIST="${CASE_DIR}/lists/corrected/${REPOP_TAG}_rhocorr${NSIDE_SUFFIX}.txt"
 CORRECTION_OUTPUT_DIR="${CASE_DIR}/logs/correction/${REPOP_RUN_TAG}"
+
+cleanup_primary_raw_fits() {
+    local base_run_resolved raw_output_resolved expected_raw_output
+    local raw_filename cleanup_target
+
+    if [ "${CLEANUP_RAW_FITS}" != "1" ]; then
+        return 0
+    fi
+
+    base_run_resolved=$(realpath -e -- "${BASE_RUN_DIR}") || {
+        echo "ERROR: could not resolve CLUMPY output root for raw FITS cleanup:" >&2
+        echo "  ${BASE_RUN_DIR}" >&2
+        return 1
+    }
+    raw_output_resolved=$(realpath -e -- "${RAW_OUTPUT_DIR}") || {
+        echo "ERROR: could not resolve raw CLUMPY output directory for cleanup:" >&2
+        echo "  ${RAW_OUTPUT_DIR}" >&2
+        return 1
+    }
+    expected_raw_output="${base_run_resolved}/${SCENARIO}/outputs/raw_clumpy/${REPOP_RUN_TAG}"
+
+    if [ "${raw_output_resolved}" != "${expected_raw_output}" ]; then
+        echo "ERROR: refusing raw FITS cleanup from an unexpected resolved directory:" >&2
+        echo "  requested: ${RAW_OUTPUT_DIR}" >&2
+        echo "  resolved:  ${raw_output_resolved}" >&2
+        echo "  expected:  ${expected_raw_output}" >&2
+        return 1
+    fi
+
+    raw_filename=$(basename -- "${RAW_FITS}")
+    if [ "$(dirname -- "${RAW_FITS}")" != "${RAW_OUTPUT_DIR}" ] \
+        || [ "${raw_filename}" != "${CLUMPY_BASENAME}.fits" ]; then
+        echo "ERROR: refusing unexpected raw FITS cleanup target:" >&2
+        echo "  ${RAW_FITS}" >&2
+        return 1
+    fi
+
+    cleanup_target="${raw_output_resolved}/${raw_filename}"
+    if [ -L "${cleanup_target}" ]; then
+        echo "ERROR: refusing to remove a symlink at the raw FITS path:" >&2
+        echo "  ${cleanup_target}" >&2
+        return 1
+    fi
+    if [ ! -e "${cleanup_target}" ]; then
+        echo "Raw CLUMPY FITS is already absent; no cleanup needed:"
+        echo "  ${cleanup_target}"
+        return 0
+    fi
+    if [ ! -f "${cleanup_target}" ]; then
+        echo "ERROR: raw FITS cleanup target is not a regular file:" >&2
+        echo "  ${cleanup_target}" >&2
+        return 1
+    fi
+
+    rm -f -- "${cleanup_target}"
+    if [ -e "${cleanup_target}" ] || [ -L "${cleanup_target}" ]; then
+        echo "ERROR: raw FITS cleanup target still exists after removal:" >&2
+        echo "  ${cleanup_target}" >&2
+        return 1
+    fi
+    echo "Removed primary raw CLUMPY FITS:"
+    echo "  ${cleanup_target}"
+}
 
 echo
 echo "======================================================================"
@@ -198,6 +270,7 @@ echo "NSIDE:     ${NSIDE}"
 echo "Run tag:   ${REPOP_RUN_TAG}"
 echo "Run mode:  ${RUN_MODE}"
 echo "Discard stale downstream: ${DISCARD_STALE_DOWNSTREAM}"
+echo "Cleanup raw FITS: ${CLEANUP_RAW_FITS}"
 echo "Catalogue root: ${CATALOG_ROOT}"
 echo "CLUMPY:    ${CLUMPY}"
 echo "CLUMPY_DATA: ${CLUMPY_DATA}"
@@ -492,9 +565,15 @@ if [ "${RUN_MODE}" = "from-correction" ]; then
     PROMOTION_ACTIVE=0
     trap - ERR
 
+    cleanup_primary_raw_fits
+
     echo
     echo "Downstream-only correction rerun completed successfully."
-    echo "Raw products were read only and were not regenerated."
+    if [ "${CLEANUP_RAW_FITS}" = "1" ]; then
+        echo "Raw correction inputs were reused; the primary raw FITS cleanup was enabled."
+    else
+        echo "Raw products were read only and were not regenerated."
+    fi
     if [ "${DISCARD_STALE_DOWNSTREAM}" = "1" ]; then
         echo "Stale downstream products were discarded after validation; no backup was retained."
     else
@@ -536,6 +615,8 @@ if [ -f "$FINAL_FITS" ] && [ -s "$FINAL_FITS" ]; then
         echo "  $TOTAL_FITS"
         exit 1
     fi
+
+    cleanup_primary_raw_fits
 
     echo "Final total FITS:"
     echo "  $TOTAL_FITS"
@@ -702,6 +783,8 @@ if [ ! -f "$TOTAL_FITS" ] || [ ! -s "$TOTAL_FITS" ]; then
     echo "  $TOTAL_FITS"
     exit 1
 fi
+
+cleanup_primary_raw_fits
 
 echo
 echo "======================================================================"

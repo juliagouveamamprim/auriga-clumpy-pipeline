@@ -56,7 +56,7 @@ case "$script_name" in
             exit 0
         fi
         mkdir -p "${case_dir}/lists/raw" "${case_dir}/pointlike"
-        : > "${case_dir}/lists/raw/${repop_tag}_raw_nopointlike_nside${nside}.txt"
+        printf 'raw list\n' > "${case_dir}/lists/raw/${repop_tag}_raw_nopointlike_nside${nside}.txt"
         printf 'fake fits\n' > "${case_dir}/pointlike/${repop_tag}_pointlike_nside${nside}.fits"
         ;;
     generate_clumpy_params.py)
@@ -96,11 +96,19 @@ case "$script_name" in
         printf 'diagnostics\n' > "$output_dir/matched.csv"
         ;;
     combine_clumpy_pointlike.py)
+        if [ "${FAKE_COMBINE_FAIL:-0}" = "1" ]; then
+            echo "synthetic combination failure" >&2
+            exit 23
+        fi
         output_fits="$(option_value --output-fits || true)"
         if [ -z "$output_fits" ]; then
             output_fits="${case_dir}/outputs/total/${repop_tag}_nside${nside}/auriga_total_nside${nside}.fits"
         fi
         mkdir -p "$(dirname "$output_fits")"
+        if [ "${FAKE_COMBINE_EMPTY:-0}" = "1" ]; then
+            : > "$output_fits"
+            exit 0
+        fi
         printf 'fake fits\n' > "$output_fits"
         ;;
     *)
@@ -130,6 +138,12 @@ case "$param_file" in
     *_raw_params_nside${nside}.txt)
         mkdir -p "$output_dir"
         printf '0 hydro_res_00001 DSPH 1 1\n' > "${output_dir}/${basename}.halo_rendered.log"
+        printf 'raw sidecar\n' > "${output_dir}/${basename}.list"
+        if [ -n "${FAKE_RAW_FITS_SYMLINK_TARGET:-}" ]; then
+            ln -s "$FAKE_RAW_FITS_SYMLINK_TARGET" "${output_dir}/${basename}.fits"
+        else
+            printf 'fake raw fits\n' > "${output_dir}/${basename}.fits"
+        fi
         ;;
     *_corrected_params_nside${nside}.txt)
         if [ "${FAKE_CLUMPY_FAIL_CORRECTED:-0}" = "1" ]; then
@@ -189,6 +203,7 @@ def run_wrapper(
     *,
     from_correction=False,
     discard_stale_downstream=False,
+    cleanup_raw_fits=False,
     **env_updates,
 ):
     environment = os.environ.copy()
@@ -216,6 +231,8 @@ def run_wrapper(
         command.append("--from-correction")
     if discard_stale_downstream:
         command.append("--discard-stale-downstream")
+    if cleanup_raw_fits:
+        command.append("--cleanup-raw-fits")
 
     return subprocess.run(
         command,
@@ -256,6 +273,20 @@ def case_paths(repository):
             / "raw_clumpy"
             / repop_dir
             / f"{basename}.halo_rendered.log"
+        ),
+        "raw_fits": (
+            case_dir
+            / "outputs"
+            / "raw_clumpy"
+            / repop_dir
+            / f"{basename}.fits"
+        ),
+        "raw_sidecar": (
+            case_dir
+            / "outputs"
+            / "raw_clumpy"
+            / repop_dir
+            / f"{basename}.list"
         ),
         "raw_output_dir": case_dir / "outputs" / "raw_clumpy" / repop_dir,
         "raw_param": (
@@ -343,6 +374,197 @@ def create_optional_raw_products(paths):
     (paths["raw_output_dir"] / "raw-map.fits").write_text(
         "original raw map\n", encoding="utf-8"
     )
+
+
+def test_default_run_preserves_primary_raw_fits(tmp_path):
+    repository, fake_python, call_log = make_test_repository(tmp_path)
+    executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
+
+    result = run_wrapper(repository, fake_python, call_log, executable)
+    paths = case_paths(repository)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert paths["raw_fits"].read_text() == "fake raw fits\n"
+    assert paths["raw_log"].is_file()
+    assert paths["total_fits"].is_file()
+
+
+def test_cleanup_removes_only_primary_raw_fits_after_success(tmp_path):
+    repository, fake_python, call_log = make_test_repository(tmp_path)
+    executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
+    paths = case_paths(repository)
+    unrelated = (
+        repository
+        / "outputs/clumpy/fragile/outputs/raw_clumpy/repop_0008_nside8"
+        / paths["raw_fits"].name
+    )
+    unrelated.parent.mkdir(parents=True)
+    unrelated.write_text("unrelated raw fits\n", encoding="utf-8")
+
+    result = run_wrapper(
+        repository,
+        fake_python,
+        call_log,
+        executable,
+        cleanup_raw_fits=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Removed primary raw CLUMPY FITS" in result.stdout
+    assert not paths["raw_fits"].exists()
+    for key in (
+        "raw_log",
+        "raw_sidecar",
+        "raw_stdout",
+        "raw_param",
+        "raw_list",
+        "corrected_list",
+        "corrected_fits",
+        "corrected_log",
+        "corrected_stdout",
+        "pointlike_fits",
+        "total_fits",
+    ):
+        assert paths[key].is_file(), key
+    assert paths["correction_dir"].is_dir()
+    assert unrelated.read_text() == "unrelated raw fits\n"
+
+
+@pytest.mark.parametrize(
+    ("failure_env", "expected_error"),
+    [
+        ({"FAKE_CLUMPY_FAIL_CORRECTED": "1"}, "synthetic corrected failure"),
+        ({"FAKE_COMBINE_FAIL": "1"}, "synthetic combination failure"),
+        (
+            {"FAKE_COMBINE_EMPTY": "1"},
+            "total FITS was not created or is empty",
+        ),
+    ],
+)
+def test_cleanup_never_runs_after_downstream_failure(
+    tmp_path, failure_env, expected_error
+):
+    repository, fake_python, call_log = make_test_repository(tmp_path)
+    executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
+
+    result = run_wrapper(
+        repository,
+        fake_python,
+        call_log,
+        executable,
+        cleanup_raw_fits=True,
+        **failure_env,
+    )
+    paths = case_paths(repository)
+
+    assert result.returncode != 0
+    assert expected_error in result.stdout + result.stderr
+    assert paths["raw_fits"].read_text() == "fake raw fits\n"
+
+
+def test_cleanup_allows_symlinked_clumpy_output_root(tmp_path):
+    repository, fake_python, call_log = make_test_repository(tmp_path)
+    executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
+    (repository / "outputs").mkdir()
+    external_clumpy = tmp_path / "external-output" / "clumpy"
+    external_clumpy.mkdir(parents=True)
+    (repository / "outputs" / "clumpy").symlink_to(
+        external_clumpy, target_is_directory=True
+    )
+
+    result = run_wrapper(
+        repository,
+        fake_python,
+        call_log,
+        executable,
+        cleanup_raw_fits=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not case_paths(repository)["raw_fits"].exists()
+    assert case_paths(repository)["raw_log"].is_file()
+
+
+def test_cleanup_rejects_raw_fits_symlink_without_touching_target(tmp_path):
+    repository, fake_python, call_log = make_test_repository(tmp_path)
+    executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
+    outside = tmp_path / "must-survive.fits"
+    outside.write_text("outside raw map\n", encoding="utf-8")
+
+    result = run_wrapper(
+        repository,
+        fake_python,
+        call_log,
+        executable,
+        cleanup_raw_fits=True,
+        FAKE_RAW_FITS_SYMLINK_TARGET=str(outside),
+    )
+    paths = case_paths(repository)
+
+    assert result.returncode != 0
+    assert "refusing to remove a symlink" in result.stderr
+    assert paths["raw_fits"].is_symlink()
+    assert outside.read_text() == "outside raw map\n"
+    assert paths["total_fits"].is_file()
+
+
+def test_cleanup_rejects_raw_directory_redirected_to_another_repopulation(tmp_path):
+    repository, fake_python, call_log = make_test_repository(tmp_path)
+    executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
+    paths = create_downstream_prerequisites(repository)
+    paths["raw_fits"].write_text("other repop raw map\n", encoding="utf-8")
+    other_repop_dir = paths["raw_output_dir"].with_name("repop_9999_nside8")
+    paths["raw_output_dir"].rename(other_repop_dir)
+    paths["raw_output_dir"].symlink_to(other_repop_dir, target_is_directory=True)
+
+    result = run_wrapper(
+        repository,
+        fake_python,
+        call_log,
+        executable,
+        from_correction=True,
+        cleanup_raw_fits=True,
+    )
+
+    assert result.returncode != 0
+    assert "unexpected resolved directory" in result.stderr
+    other_raw_fits = other_repop_dir / paths["raw_fits"].name
+    assert other_raw_fits.read_text() == "other repop raw map\n"
+
+
+def test_from_correction_is_idempotent_after_raw_fits_cleanup(tmp_path):
+    repository, fake_python, call_log = make_test_repository(tmp_path)
+    executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
+    catalog = repository / "outputs/repop_0007/fullrepop_hydro_resilient.h5"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text("catalogue\n", encoding="utf-8")
+
+    first = run_wrapper(
+        repository,
+        fake_python,
+        call_log,
+        executable,
+        cleanup_raw_fits=True,
+    )
+    paths = case_paths(repository)
+    assert first.returncode == 0, first.stdout + first.stderr
+    assert not paths["raw_fits"].exists()
+
+    second = run_wrapper(
+        repository,
+        fake_python,
+        call_log,
+        executable,
+        from_correction=True,
+        cleanup_raw_fits=True,
+    )
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "already absent; no cleanup needed" in second.stdout
+    assert not paths["raw_fits"].exists()
+    assert paths["raw_log"].is_file()
+    assert paths["corrected_fits"].is_file()
+    assert paths["total_fits"].is_file()
 
 
 def test_from_correction_reuses_raw_and_replaces_stale_downstream_only(tmp_path):
@@ -435,6 +657,7 @@ def test_from_correction_failure_leaves_stable_downstream_untouched(tmp_path):
     repository, fake_python, call_log = make_test_repository(tmp_path)
     executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
     paths = create_downstream_prerequisites(repository)
+    paths["raw_fits"].write_text("original raw fits\n", encoding="utf-8")
     paths["corrected_fits"].parent.mkdir(parents=True)
     paths["corrected_fits"].write_text("stale corrected fits\n", encoding="utf-8")
     paths["total_fits"].parent.mkdir(parents=True)
@@ -446,6 +669,7 @@ def test_from_correction_failure_leaves_stable_downstream_untouched(tmp_path):
         call_log,
         executable,
         from_correction=True,
+        cleanup_raw_fits=True,
         FAKE_CLUMPY_FAIL_CORRECTED="1",
     )
 
@@ -454,6 +678,7 @@ def test_from_correction_failure_leaves_stable_downstream_untouched(tmp_path):
     assert paths["total_fits"].read_text() == "stale total fits\n"
     assert paths["raw_list"].read_text() == "original raw list\n"
     assert paths["raw_log"].read_text() == "original raw rendered log\n"
+    assert paths["raw_fits"].read_text() == "original raw fits\n"
 
 
 def test_discard_stale_downstream_removes_only_exact_downstream_paths(tmp_path):
@@ -461,6 +686,7 @@ def test_discard_stale_downstream_removes_only_exact_downstream_paths(tmp_path):
     executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
     paths = create_downstream_prerequisites(repository)
     create_optional_raw_products(paths)
+    paths["raw_fits"].write_text("primary raw fits\n", encoding="utf-8")
     create_stale_downstream_products(paths)
 
     unrelated = (
@@ -492,6 +718,7 @@ def test_discard_stale_downstream_removes_only_exact_downstream_paths(tmp_path):
         executable,
         from_correction=True,
         discard_stale_downstream=True,
+        cleanup_raw_fits=True,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -501,6 +728,8 @@ def test_discard_stale_downstream_removes_only_exact_downstream_paths(tmp_path):
     for key, contents in protected.items():
         assert paths[key].read_bytes() == contents
     assert raw_map.read_bytes() == raw_map_before
+    assert not paths["raw_fits"].exists()
+    assert paths["raw_log"].read_bytes() == protected["raw_log"]
     assert unrelated.read_text(encoding="utf-8") == "unrelated total\n"
     assert paths["corrected_list"].read_text() == "corrected list\n"
     assert paths["corrected_fits"].read_text() == "fake fits\n"
@@ -659,7 +888,63 @@ def test_batch_from_correction_does_not_skip_existing_total(tmp_path):
     assert "Skipped:    0" in result.stdout
 
 
-def test_batch_propagates_discard_stale_downstream(tmp_path):
+def test_batch_cleanup_option_does_not_change_skip_completed(tmp_path):
+    repository = tmp_path / "auriga-pipeline"
+    scripts = repository / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(SOURCE_BATCH_WRAPPER, scripts / SOURCE_BATCH_WRAPPER.name)
+    invocation_log = tmp_path / "one-case-invocation.txt"
+    write_executable(
+        scripts / SOURCE_WRAPPER.name,
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" > \"$BATCH_ONE_CASE_LOG\"\n",
+    )
+    catalog_root = tmp_path / "catalogues"
+    catalog = catalog_root / "repop_0007" / "fullrepop_hydro_resilient.h5"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text("catalogue\n", encoding="utf-8")
+    total = (
+        repository
+        / "outputs/clumpy/resilient/outputs/total/repop_0007_nside8"
+        / "auriga_total_nside8.fits"
+    )
+    total.parent.mkdir(parents=True)
+    total.write_text("completed total\n", encoding="utf-8")
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "BATCH_ONE_CASE_LOG": str(invocation_log),
+            "CATALOG_ROOT": str(catalog_root),
+            "NSIDE": "8",
+            "LAUNCH_DELAY_SECONDS": "0",
+            "POLL_SECONDS": "0",
+            "SKIP_COMPLETED": "1",
+        }
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(scripts / SOURCE_BATCH_WRAPPER.name),
+            "7",
+            "7",
+            "resilient",
+            "1",
+            "--cleanup-raw-fits",
+        ],
+        cwd=repository,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not invocation_log.exists()
+    assert "Skipped:    1" in result.stdout
+
+
+def test_batch_propagates_discard_and_cleanup_options(tmp_path):
     repository = tmp_path / "auriga-pipeline"
     scripts = repository / "scripts"
     scripts.mkdir(parents=True)
@@ -695,6 +980,7 @@ def test_batch_propagates_discard_stale_downstream(tmp_path):
             "1",
             "--from-correction",
             "--discard-stale-downstream",
+            "--cleanup-raw-fits",
         ],
         cwd=repository,
         env=environment,
@@ -705,7 +991,8 @@ def test_batch_propagates_discard_stale_downstream(tmp_path):
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert invocation_log.read_text().strip() == (
-        "7 resilient --from-correction --discard-stale-downstream"
+        "7 resilient --from-correction --discard-stale-downstream "
+        "--cleanup-raw-fits"
     )
 
 
