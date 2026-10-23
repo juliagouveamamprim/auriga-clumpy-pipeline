@@ -370,7 +370,7 @@ def configure_plot_style() -> None:
             "axes.titlesize": 16,
             "xtick.labelsize": 13,
             "ytick.labelsize": 13,
-            "legend.fontsize": 11,
+            "legend.fontsize": 12,
         }
     )
 
@@ -378,7 +378,13 @@ def configure_plot_style() -> None:
 def _finish_axis(axis: plt.Axes) -> None:
     axis.grid(False, which="both")
     axis.tick_params(direction="in", which="both", top=True, right=True)
-    axis.legend(frameon=False)
+    axis.legend(
+        frameon=False,
+        handlelength=2.4,
+        handletextpad=0.9,
+        borderpad=0.5,
+        labelspacing=0.6,
+    )
 
 
 def _save_figure(
