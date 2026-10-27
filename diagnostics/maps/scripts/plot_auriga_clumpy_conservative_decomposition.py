@@ -38,6 +38,7 @@ DEFAULT_NSIDE = 2048
 DEFAULT_XSIZE = 800
 DEFAULT_CHUNK_SIZE = 1_000_000
 SUPPORTED_COLORMAPS = ("magma", "plasma", "turbo", "viridis")
+SUPPORTED_OUTPUT_FORMATS = ("png", "pdf")
 EXPECTED_UNIT = u.GeV**2 / u.cm**5
 CLUMPY_EMPTY_JEXTENDED = np.float32(1.0e-40)
 ZERO_SENTINEL = np.float32(-np.finfo(np.float32).max)
@@ -50,6 +51,8 @@ def configure_plot_style() -> None:
             "font.family": "serif",
             "font.serif": ["STIXGeneral", "DejaVu Serif"],
             "mathtext.fontset": "stix",
+            "pdf.fonttype": 42,
+            "ps.fonttype": 42,
             "axes.labelsize": 15,
             "axes.titlesize": 16,
             "xtick.labelsize": 13,
@@ -350,14 +353,14 @@ def add_graticule(
             np.full(longitude.shape, latitude_deg),
             lonlat=True,
         )
-        axes.plot(x, y, color=color, alpha=0.32, linewidth=0.45)
+        axes.plot(x, y, color=color, alpha=0.20, linewidth=0.45)
     for longitude_deg in range(-150, 181, 30):
         x, y = projector.ang2xy(
             np.full(latitude.shape, float(longitude_deg)),
             latitude,
             lonlat=True,
         )
-        axes.plot(x, y, color=color, alpha=0.32, linewidth=0.45)
+        axes.plot(x, y, color=color, alpha=0.20, linewidth=0.45)
 
 
 def pixel_layout(
@@ -547,9 +550,12 @@ def render_figure(
         bbox_transform=figure.transFigure,
         frameon=False,
     )
+    output_dpi = (
+        args.pdf_dpi if output_path.suffix.lower() == ".pdf" else args.dpi
+    )
     figure.savefig(
         output_path,
-        dpi=args.dpi,
+        dpi=output_dpi,
         facecolor=figure.get_facecolor(),
     )
     plt.close(figure)
@@ -626,7 +632,31 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resilient-map", type=Path, default=None)
     parser.add_argument("--xsize", type=int, default=conventional.DEFAULT_XSIZE)
     parser.add_argument("--panel-scale", type=float, default=2.0)
-    parser.add_argument("--dpi", type=int, default=220)
+    parser.add_argument(
+        "--formats",
+        nargs="+",
+        choices=SUPPORTED_OUTPUT_FORMATS,
+        default=("png",),
+        help="Figure formats to write (default: png).",
+    )
+    parser.add_argument(
+        "--dpi",
+        type=int,
+        default=220,
+        help=(
+            "PNG resolution and reference layout DPI; retaining the default "
+            "preserves the approved PNG geometry (default: 220)."
+        ),
+    )
+    parser.add_argument(
+        "--pdf-dpi",
+        type=int,
+        default=500,
+        help=(
+            "Rasterization DPI for map layers embedded directly in PDF "
+            "outputs (default: 500)."
+        ),
+    )
     parser.add_argument(
         "--chunk-size",
         type=int,
@@ -668,8 +698,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--xsize must be an even integer of at least 4.")
     if not np.isfinite(args.panel_scale) or args.panel_scale <= 0.0:
         raise ValueError("--panel-scale must be positive and finite.")
-    if args.dpi <= 0 or args.chunk_size <= 0:
-        raise ValueError("--dpi and --chunk-size must be positive.")
+    if args.dpi <= 0 or args.pdf_dpi <= 0 or args.chunk_size <= 0:
+        raise ValueError("--dpi, --pdf-dpi, and --chunk-size must be positive.")
+    if "pdf" in args.formats and args.pdf_dpi < 400:
+        raise ValueError("PDF export requires --pdf-dpi >= 400.")
     if not (
         0.0
         <= args.lower_percentile
@@ -710,6 +742,20 @@ def output_paths(
         output_dir / f"{basename}.json",
         output_dir / f"{basename}_cell_counts.npz",
     )
+
+
+def selected_figure_paths(
+    args: argparse.Namespace,
+) -> tuple[dict[str, dict[str, Path]], Path, Path]:
+    png_paths, json_path, npz_path = output_paths(args)
+    figure_paths = {
+        scenario: {
+            output_format: png_path.with_suffix(f".{output_format}")
+            for output_format in args.formats
+        }
+        for scenario, png_path in png_paths.items()
+    }
+    return figure_paths, json_path, npz_path
 
 
 def make_conservative_geometry(xsize: int) -> ConservativeGeometry:
@@ -1262,7 +1308,23 @@ def write_diagnostics(
     conventional_diagnostics: dict[str, object],
     canvas_sizes: dict[str, tuple[int, int]],
     args: argparse.Namespace,
+    output_pdfs: dict[str, Path] | None = None,
 ) -> None:
+    panel_width = int(round(args.xsize * args.panel_scale))
+    panel_height = int(round((args.xsize // 2) * args.panel_scale))
+    export_dpi = {
+        "png": args.dpi,
+        "pdf": args.pdf_dpi,
+    }
+    estimated_map_artist_pixels = {
+        output_format: {
+            "width": int(round(panel_width * export_dpi[output_format] / args.dpi)),
+            "height": int(
+                round(panel_height * export_dpi[output_format] / args.dpi)
+            ),
+        }
+        for output_format in args.formats
+    }
     payload = {
         "prototype": "experimental conservative-sum Mollweide reprojection",
         "inputs": {key: str(value) for key, value in input_paths.items()},
@@ -1321,6 +1383,23 @@ def write_diagnostics(
             "cmap": args.cmap,
             "zero_color": args.zero_color,
             "interpolation": "nearest",
+            "formats": list(args.formats),
+            "png_and_layout_dpi": args.dpi,
+            "pdf_raster_dpi": args.pdf_dpi,
+            "pdf_text_and_annotations_remain_vector": True,
+            "projected_map_raster_pixels": {
+                "width": args.xsize,
+                "height": args.xsize // 2,
+            },
+            "estimated_map_artist_pixels_at_export_dpi": (
+                estimated_map_artist_pixels
+            ),
+            "export_samples_per_projected_cell": {
+                output_format: (
+                    args.panel_scale * export_dpi[output_format] / args.dpi
+                )
+                for output_format in args.formats
+            },
         },
         "scale_selection": {
             "mode": args.normalization,
@@ -1378,6 +1457,10 @@ def write_diagnostics(
             ),
         },
     }
+    if output_pdfs:
+        payload["pdfs"] = {
+            key: str(value) for key, value in output_pdfs.items()
+        }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
@@ -1385,13 +1468,27 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
     validate_args(args)
     input_paths = conventional.resolve_map_paths(args)
-    png_paths, json_path, npz_path = output_paths(args)
-    png_paths = {key: value.expanduser().resolve() for key, value in png_paths.items()}
+    figure_paths, json_path, npz_path = selected_figure_paths(args)
+    figure_paths = {
+        scenario: {
+            output_format: path.expanduser().resolve()
+            for output_format, path in paths.items()
+        }
+        for scenario, paths in figure_paths.items()
+    }
     json_path = json_path.expanduser().resolve()
     npz_path = npz_path.expanduser().resolve()
     existing = [
         path
-        for path in (*png_paths.values(), json_path, npz_path)
+        for path in (
+            *(
+                path
+                for paths in figure_paths.values()
+                for path in paths.values()
+            ),
+            json_path,
+            npz_path,
+        )
         if path.exists()
     ]
     if existing and not args.overwrite:
@@ -1447,13 +1544,29 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     canvas_sizes = {}
     for scenario in conventional.SCENARIOS:
-        canvas_sizes[scenario] = conventional.render_figure(
-            scenario,
-            projected,
-            limits,
-            png_paths[scenario],
-            args,
-        )
+        for output_format in args.formats:
+            canvas_size = conventional.render_figure(
+                scenario,
+                projected,
+                limits,
+                figure_paths[scenario][output_format],
+                args,
+            )
+            if scenario in canvas_sizes and canvas_sizes[scenario] != canvas_size:
+                raise RuntimeError(
+                    f"Inconsistent canvas size between output formats for {scenario}."
+                )
+            canvas_sizes[scenario] = canvas_size
+    png_paths = {
+        scenario: paths["png"]
+        for scenario, paths in figure_paths.items()
+        if "png" in paths
+    }
+    pdf_paths = {
+        scenario: paths["pdf"]
+        for scenario, paths in figure_paths.items()
+        if "pdf" in paths
+    }
     write_diagnostics(
         json_path,
         npz_path,
@@ -1468,10 +1581,15 @@ def main(argv: Sequence[str] | None = None) -> None:
         conventional_diagnostics,
         canvas_sizes,
         args,
+        output_pdfs=pdf_paths,
     )
 
     for scenario in conventional.SCENARIOS:
-        print(f"PNG ({scenario}): {png_paths[scenario]}")
+        for output_format in args.formats:
+            print(
+                f"{output_format.upper()} ({scenario}): "
+                f"{figure_paths[scenario][output_format]}"
+            )
     print(f"JSON: {json_path}")
     print(f"Cell counts NPZ: {npz_path}")
 
