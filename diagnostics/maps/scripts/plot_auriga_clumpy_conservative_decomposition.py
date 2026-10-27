@@ -37,10 +37,26 @@ PIXEL_COLUMN = "PIXEL"
 DEFAULT_NSIDE = 2048
 DEFAULT_XSIZE = 800
 DEFAULT_CHUNK_SIZE = 1_000_000
-SUPPORTED_COLORMAPS = ("magma", "turbo", "viridis")
+SUPPORTED_COLORMAPS = ("magma", "plasma", "turbo", "viridis")
 EXPECTED_UNIT = u.GeV**2 / u.cm**5
 CLUMPY_EMPTY_JEXTENDED = np.float32(1.0e-40)
 ZERO_SENTINEL = np.float32(-np.finfo(np.float32).max)
+
+
+def configure_plot_style() -> None:
+    plt.rcParams.update(
+        {
+            "text.usetex": False,
+            "font.family": "serif",
+            "font.serif": ["STIXGeneral", "DejaVu Serif"],
+            "mathtext.fontset": "stix",
+            "axes.labelsize": 15,
+            "axes.titlesize": 16,
+            "xtick.labelsize": 13,
+            "ytick.labelsize": 13,
+            "legend.fontsize": 12,
+        }
+    )
 
 
 @dataclass(frozen=True)
@@ -355,10 +371,10 @@ def pixel_layout(
     top = 90
     bottom = 260
     column_gap = 60
-    row_gap = 270
+    row_gap = 375
     colorbar_bottom = 125
     colorbar_gap = bottom - colorbar_bottom
-    colorbar_height = 20
+    colorbar_height = 24
 
     canvas_width = left + 2 * panel_width + column_gap + right
     canvas_height = top + 2 * panel_height + row_gap + bottom
@@ -415,6 +431,7 @@ def render_figure(
     output_path: Path,
     args: argparse.Namespace,
 ) -> tuple[int, int]:
+    configure_plot_style()
     (
         canvas_width,
         canvas_height,
@@ -496,7 +513,7 @@ def render_figure(
             component.title,
             ha="center",
             va="bottom",
-            fontsize=11,
+            fontsize=matplotlib.rcParams["axes.titlesize"],
             fontweight="semibold",
         )
 
@@ -513,36 +530,23 @@ def render_figure(
             ScalarMappable(norm=normalization, cmap=base_cmap),
             cax=colorbar_axes,
             orientation="horizontal",
-            extend="both",
+            extend="neither",
         )
-        colorbar.ax.tick_params(labelsize=7, length=2)
+        colorbar.ax.tick_params(length=2)
         colorbar.set_label(
             r"$\log_{10}(J\,[\mathrm{GeV}^2\,\mathrm{cm}^{-5}])$",
-            fontsize=8,
             labelpad=2,
         )
 
     figure.legend(
-        handles=[Patch(facecolor=args.zero_color, edgecolor="none", label="J = 0")],
+        handles=[
+            Patch(facecolor=args.zero_color, edgecolor="none", label=r"$J = 0$")
+        ],
         loc="lower left",
         bbox_to_anchor=(8 / canvas_width, 8 / canvas_height),
         bbox_transform=figure.transFigure,
         frameon=False,
-        fontsize=8,
     )
-    figure.text(
-        1.0 - 8 / canvas_width,
-        13 / canvas_height,
-        (
-            "Positive J outside [vmin, vmax] is saturated at the nearest "
-            "colormap endpoint.  "
-            "Exact CLUMPY empty-Jextended sentinel is displayed as J=0."
-        ),
-        ha="right",
-        va="bottom",
-        fontsize=7,
-    )
-
     figure.savefig(
         output_path,
         dpi=args.dpi,
