@@ -142,3 +142,79 @@ figure (PNG and PDF) and a numerical summary CSV under
 
 Use `--fragile-map` and `--resilient-map` to override either input, and
 `--output-dir`, `--formats`, or `--basename` to configure generated products.
+
+## Quantitative subhalo and total region-of-interest figures
+
+`scripts/explore_auriga_clumpy_rois.py` compares the subhalo and total emission
+
+    J_sub = Jpointlike + Jextended
+    J_tot = Jsmooth + Jpointlike + Jextended
+
+constructed directly from the three component columns in the `JFACTOR` HDU.
+The ROI reader reads `Jsmooth`, `Jpointlike`, and `Jextended` because it
+constructs both displayed fields. Only `Jpointlike` and `Jextended` enter
+`J_sub`; `Jsmooth` is additionally used for `J_tot`. The stored `Jtot` column
+is not read for display. The values retain their original meaning as integrated
+J-factor per native HEALPix pixel in `GeV^2 cm^-5`.
+
+The script queries the NESTED HEALPix pixels intersecting each 20 by 10 degree
+field, projects every native pixel boundary to a gnomonic tangent plane, and
+draws one flat-valued polygon per pixel. There is no image-grid resampling,
+interpolation, smoothing, dilation, glow, transparency, component composition,
+or artificial boost. The 2 by 2 layout has fragile `J_sub` and `J_tot` in the
+first row and resilient `J_sub` and `J_tot` in the second. Both panels in a row
+reuse exactly the same ROI geometry. The two columns have independent
+`matplotlib.colors.LogNorm` instances: the `J_sub` limits are the exact minimum
+positive and maximum values across its fragile and resilient panels, while the
+`J_tot` limits are calculated in the same way from only the two `J_tot` panels.
+There is no percentile clipping. Each normalization is represented by a
+quantitative horizontal colorbar below its column, and both use `viridis` by
+default. Exact zeros cannot be represented on a logarithmic scale; they are
+retained as zero and drawn as opaque black polygons, without an artificial
+positive floor. The axes background is also black so no white gaps appear at
+the ROI boundary.
+
+The requested width and height define the rectangular tangent-plane bounds
+`|x| <= tan(width/2)` and `|y| <= tan(height/2)`; away from the Galactic plane,
+they are not the longitude and latitude spans of every panel edge. Longitude
+ticks use the point where each constant-longitude locus crosses the horizontal
+central axis (`y=0`), so `x=-cos(b0) tan(delta_l)` for central latitude `b0`.
+Such a locus is generally curved rather than a vertical line in a gnomonic
+projection. Latitude ticks analogously refer to the vertical central axis
+(`x=0`), where `y=tan(delta_b)`. The negative sign in the horizontal relation
+keeps Galactic longitude increasing toward the left.
+
+The defaults use ROI 04 for both fragile and resilient, centred at Galactic
+`(l,b)=(340,5)` degrees, with NSIDE=2048, a 20 by 10 degree field, and
+`viridis`:
+
+    python3 -u diagnostics/maps/scripts/explore_auriga_clumpy_rois.py \
+        --repop-id 0 \
+        --nside 2048 \
+        --fragile-roi roi_04 \
+        --resilient-roi roi_04 \
+        --roi-width-deg 20 \
+        --roi-height-deg 10 \
+        --cmap viridis \
+        --formats png pdf \
+        --dpi 500
+
+The two scenarios are configured independently. A later comparison can, for
+example, use fragile ROI 01 and resilient ROI 04 by passing
+`--fragile-roi roi_01 --resilient-roi roi_04`. Within each scenario, `J_sub`
+and `J_tot` always use that scenario's selected ROI. Within each column, the
+joint logarithmic limits are computed from every positive native-pixel value
+in the fragile and resilient panels. The two columns do not share limits.
+
+The default output directory is
+`outputs/diagnostics/maps/subhalo_rois/repop_0000/`. The figure basename records
+both scenario-specific ROI choices and NSIDE. A JSON file beside each figure
+records the input maps, component sums, zero and positive pixel counts, both
+sets of exact normalization limits, geometry, the 2 by 2 layout, title and
+colorbar overlap checks, and all disabled display operations. Generated
+figures and diagnostics under `outputs/` must not be committed.
+
+PNG and PDF use the same projected polygons. PDF output is hybrid: the polygon
+collections and colorbar gradient are rasterized at the requested DPI, while
+text, axes, ticks, and colorbar labels remain vector elements. PDF export
+requires at least 400 dpi and defaults to 500 dpi.
