@@ -84,14 +84,22 @@ def test_defaults_are_roi_04_nside2048_viridis_and_20_by_10_degrees():
     assert args.cmap == "viridis"
 
 
-def test_typography_matches_official_all_sky_hierarchy():
+def test_typography_accounts_for_manuscript_scaling():
     style = preview.plot_style()
 
-    assert style["axes.titlesize"] == 16
-    assert style["axes.labelsize"] == 15
-    assert style["xtick.labelsize"] == 13
-    assert style["ytick.labelsize"] == 13
-    assert style["legend.fontsize"] == 12
+    assert style["axes.titlesize"] == 22.3
+    assert style["axes.labelsize"] == 20.2
+    assert style["xtick.labelsize"] == 18.1
+    assert style["ytick.labelsize"] == 18.1
+    assert style["legend.fontsize"] == 18.1
+
+    with plt.rc_context():
+        preview.fullsky.configure_plot_style()
+        assert plt.rcParams["axes.titlesize"] == 26.4
+        assert plt.rcParams["axes.labelsize"] == 23.9
+        assert plt.rcParams["xtick.labelsize"] == 21.4
+        assert plt.rcParams["ytick.labelsize"] == 21.4
+        assert plt.rcParams["legend.fontsize"] == 21.4
 
 
 def test_read_subhalo_values_sums_only_native_scientific_components(tmp_path):
@@ -416,6 +424,9 @@ def test_main_renders_quantitative_subhalo_and_total_roi_04_comparison(
         is True
     )
     assert payload["rendering"]["layout_validation"][
+        "panels_overlap_each_other"
+    ] is False
+    assert payload["rendering"]["layout_validation"][
         "colorbars_overlap_panels"
     ] is False
     assert payload["rendering"]["layout_validation"][
@@ -426,6 +437,9 @@ def test_main_renders_quantitative_subhalo_and_total_roi_04_comparison(
     ] is False
     assert payload["rendering"]["layout_validation"][
         "zero_indicator_present"
+    ] is True
+    assert payload["rendering"]["layout_validation"][
+        "zero_indicator_within_figure"
     ] is True
     assert payload["rendering"]["layout_validation"][
         "zero_indicator_overlaps_colorbars"

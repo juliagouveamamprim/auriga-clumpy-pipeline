@@ -42,6 +42,11 @@ SUPPORTED_OUTPUT_FORMATS = ("png", "pdf")
 EXPECTED_UNIT = u.GeV**2 / u.cm**5
 CLUMPY_EMPTY_JEXTENDED = np.float32(1.0e-40)
 ZERO_SENTINEL = np.float32(-np.finfo(np.float32).max)
+# Compensate for scaling the 15.364-inch PDF to a 440 TeX pt text width.
+PANEL_TITLE_FONTSIZE = 26.4
+LABEL_FONTSIZE = 23.9
+TICK_FONTSIZE = 21.4
+LEGEND_FONTSIZE = 21.4
 
 
 def configure_plot_style() -> None:
@@ -53,11 +58,11 @@ def configure_plot_style() -> None:
             "mathtext.fontset": "stix",
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
-            "axes.labelsize": 15,
-            "axes.titlesize": 16,
-            "xtick.labelsize": 13,
-            "ytick.labelsize": 13,
-            "legend.fontsize": 12,
+            "axes.labelsize": LABEL_FONTSIZE,
+            "axes.titlesize": PANEL_TITLE_FONTSIZE,
+            "xtick.labelsize": TICK_FONTSIZE,
+            "ytick.labelsize": TICK_FONTSIZE,
+            "legend.fontsize": LEGEND_FONTSIZE,
         }
     )
 
@@ -375,9 +380,9 @@ def pixel_layout(
     bottom = 260
     column_gap = 60
     row_gap = 375
-    colorbar_bottom = 125
+    colorbar_bottom = 180
     colorbar_gap = bottom - colorbar_bottom
-    colorbar_height = 24
+    colorbar_height = 30
 
     canvas_width = left + 2 * panel_width + column_gap + right
     canvas_height = top + 2 * panel_height + row_gap + bottom
@@ -535,7 +540,7 @@ def render_figure(
             orientation="horizontal",
             extend="neither",
         )
-        colorbar.ax.tick_params(length=2)
+        colorbar.ax.tick_params(length=3.5, labelsize=TICK_FONTSIZE)
         colorbar.set_label(
             r"$\log_{10}(J\,[\mathrm{GeV}^2\,\mathrm{cm}^{-5}])$",
             labelpad=2,
@@ -546,7 +551,7 @@ def render_figure(
             Patch(facecolor=args.zero_color, edgecolor="none", label=r"$J = 0$")
         ],
         loc="lower left",
-        bbox_to_anchor=(8 / canvas_width, 8 / canvas_height),
+        bbox_to_anchor=(16 / canvas_width, 16 / canvas_height),
         bbox_transform=figure.transFigure,
         frameon=False,
     )

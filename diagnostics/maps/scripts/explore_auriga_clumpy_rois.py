@@ -57,6 +57,11 @@ ROI_CENTERS = {
     "roi_03": (30.0, -5.0),
     "roi_04": (340.0, 5.0),
 }
+# Compensate for scaling the 13-inch PDF to a 440 TeX pt text width.
+PANEL_TITLE_FONTSIZE = 22.3
+LABEL_FONTSIZE = 20.2
+TICK_FONTSIZE = 18.1
+LEGEND_FONTSIZE = 18.1
 
 
 @dataclass(frozen=True)
@@ -528,11 +533,11 @@ def plot_style() -> dict[str, object]:
         "mathtext.fontset": "stix",
         "pdf.fonttype": 42,
         "ps.fonttype": 42,
-        "axes.labelsize": 15,
-        "axes.titlesize": 16,
-        "xtick.labelsize": 13,
-        "ytick.labelsize": 13,
-        "legend.fontsize": 12,
+        "axes.labelsize": LABEL_FONTSIZE,
+        "axes.titlesize": PANEL_TITLE_FONTSIZE,
+        "xtick.labelsize": TICK_FONTSIZE,
+        "ytick.labelsize": TICK_FONTSIZE,
+        "legend.fontsize": LEGEND_FONTSIZE,
     }
 
 
@@ -567,7 +572,7 @@ def _render_comparison(
         bottom=0.24,
         top=0.93,
         wspace=0.10,
-        hspace=0.28,
+        hspace=0.36,
     )
     rendered_counts = {}
 
@@ -651,6 +656,7 @@ def _render_comparison(
         colorbar.set_ticks(colorbar_ticks)
         colorbar.ax.xaxis.set_major_formatter(FuncFormatter(scientific_tick_label))
         colorbar.ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
+        colorbar.ax.tick_params(labelsize=TICK_FONTSIZE)
         symbol = (
             r"J_{\mathrm{sub}}" if field_name == "J_sub" else r"J_{\mathrm{tot}}"
         )
@@ -680,7 +686,7 @@ def _render_comparison(
         renderer = figure.canvas.get_renderer()
         j_sub_colorbar_bound = colorbar_axes[0].get_tightbbox(renderer)
         j_sub_colorbar_position = colorbar_axes[0].get_position()
-        indicator_gap = 0.012
+        indicator_gap = 0.008
         zero_indicator = figure.legend(
             handles=[
                 Patch(
@@ -698,15 +704,22 @@ def _render_comparison(
             bbox_transform=figure.transFigure,
             frameon=False,
             borderaxespad=0.0,
-            handlelength=0.7,
-            handleheight=0.7,
-            handletextpad=0.45,
+            handlelength=0.5,
+            handleheight=0.6,
+            handletextpad=0.3,
         )
 
     figure.canvas.draw()
     renderer = figure.canvas.get_renderer()
     panel_bounds = [axes_item.get_tightbbox(renderer) for axes_item in axes.flat]
     colorbar_bounds = [axis.get_tightbbox(renderer) for axis in colorbar_axes]
+    panels_overlap_each_other = bool(
+        any(
+            left.overlaps(right)
+            for index, left in enumerate(panel_bounds)
+            for right in panel_bounds[index + 1 :]
+        )
+    )
     colorbars_overlap_panels = bool(
         any(
             colorbar_bound.overlaps(panel_bound)
@@ -721,6 +734,16 @@ def _render_comparison(
         zero_indicator.get_window_extent(renderer)
         if zero_indicator is not None
         else None
+    )
+    figure_bound = figure.bbox
+    zero_indicator_within_figure = bool(
+        zero_indicator_bound is None
+        or (
+            zero_indicator_bound.x0 >= figure_bound.x0
+            and zero_indicator_bound.y0 >= figure_bound.y0
+            and zero_indicator_bound.x1 <= figure_bound.x1
+            and zero_indicator_bound.y1 <= figure_bound.y1
+        )
     )
     zero_indicator_overlaps_colorbars = bool(
         zero_indicator_bound is not None
@@ -790,10 +813,12 @@ def _render_comparison(
             "panel_titles_single_line": all(
                 "\n" not in axes_item.get_title() for axes_item in axes.flat
             ),
+            "panels_overlap_each_other": panels_overlap_each_other,
             "colorbars_overlap_panels": colorbars_overlap_panels,
             "colorbars_overlap_each_other": colorbars_overlap_each_other,
             "colorbar_tick_labels_overlap": bool(colorbar_tick_labels_overlap),
             "zero_indicator_present": zero_indicator is not None,
+            "zero_indicator_within_figure": zero_indicator_within_figure,
             "zero_indicator_overlaps_colorbars": (
                 zero_indicator_overlaps_colorbars
             ),
