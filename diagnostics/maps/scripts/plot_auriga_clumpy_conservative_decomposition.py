@@ -43,10 +43,10 @@ EXPECTED_UNIT = u.GeV**2 / u.cm**5
 CLUMPY_EMPTY_JEXTENDED = np.float32(1.0e-40)
 ZERO_SENTINEL = np.float32(-np.finfo(np.float32).max)
 # Compensate for scaling the 15.364-inch PDF to a 440 TeX pt text width.
-PANEL_TITLE_FONTSIZE = 26.4
-LABEL_FONTSIZE = 23.9
-TICK_FONTSIZE = 21.4
-LEGEND_FONTSIZE = 21.4
+PANEL_TITLE_FONTSIZE = 22.6
+LABEL_FONTSIZE = 20.1
+TICK_FONTSIZE = 18.9
+LEGEND_FONTSIZE = 18.9
 
 
 def configure_plot_style() -> None:
@@ -380,7 +380,7 @@ def pixel_layout(
     bottom = 260
     column_gap = 60
     row_gap = 375
-    colorbar_bottom = 180
+    colorbar_bottom = 195
     colorbar_gap = bottom - colorbar_bottom
     colorbar_height = 30
 
@@ -514,7 +514,7 @@ def render_figure(
     for panel_index, component in enumerate(COMPONENTS):
         panel_left, panel_bottom = panel_origins[panel_index]
         center_x = (panel_left + panel_width / 2.0) / canvas_width
-        title_y = (panel_bottom + panel_height + 25) / canvas_height
+        title_y = (panel_bottom + panel_height + 15) / canvas_height
         figure.text(
             center_x,
             title_y,
@@ -543,7 +543,7 @@ def render_figure(
         colorbar.ax.tick_params(length=3.5, labelsize=TICK_FONTSIZE)
         colorbar.set_label(
             r"$\log_{10}(J\,[\mathrm{GeV}^2\,\mathrm{cm}^{-5}])$",
-            labelpad=2,
+            labelpad=3.0,
         )
 
     figure.legend(
@@ -554,6 +554,10 @@ def render_figure(
         bbox_to_anchor=(16 / canvas_width, 16 / canvas_height),
         bbox_transform=figure.transFigure,
         frameon=False,
+        borderaxespad=0.0,
+        handlelength=0.6,
+        handleheight=0.7,
+        handletextpad=0.3,
     )
     output_dpi = (
         args.pdf_dpi if output_path.suffix.lower() == ".pdf" else args.dpi

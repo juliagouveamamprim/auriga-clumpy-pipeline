@@ -87,19 +87,66 @@ def test_defaults_are_roi_04_nside2048_viridis_and_20_by_10_degrees():
 def test_typography_accounts_for_manuscript_scaling():
     style = preview.plot_style()
 
-    assert style["axes.titlesize"] == 22.3
-    assert style["axes.labelsize"] == 20.2
-    assert style["xtick.labelsize"] == 18.1
-    assert style["ytick.labelsize"] == 18.1
-    assert style["legend.fontsize"] == 18.1
+    assert style["axes.titlesize"] == 19.1
+    assert style["axes.labelsize"] == 17.0
+    assert style["xtick.labelsize"] == 16.0
+    assert style["ytick.labelsize"] == 16.0
+    assert style["legend.fontsize"] == 16.0
+
+    latex_scale = (440.0 / 72.27) / 13.0
+    tex_points_per_matplotlib_point = 72.27 / 72.0
+    assert (
+        style["axes.titlesize"]
+        * latex_scale
+        * tex_points_per_matplotlib_point
+    ) == pytest.approx(9.0, abs=0.03)
+    assert (
+        style["axes.labelsize"]
+        * latex_scale
+        * tex_points_per_matplotlib_point
+    ) == pytest.approx(8.0, abs=0.03)
+    assert (
+        style["xtick.labelsize"]
+        * latex_scale
+        * tex_points_per_matplotlib_point
+    ) == pytest.approx(7.5, abs=0.03)
 
     with plt.rc_context():
         preview.fullsky.configure_plot_style()
-        assert plt.rcParams["axes.titlesize"] == 26.4
-        assert plt.rcParams["axes.labelsize"] == 23.9
-        assert plt.rcParams["xtick.labelsize"] == 21.4
-        assert plt.rcParams["ytick.labelsize"] == 21.4
-        assert plt.rcParams["legend.fontsize"] == 21.4
+        assert plt.rcParams["axes.titlesize"] == 22.6
+        assert plt.rcParams["axes.labelsize"] == 20.1
+        assert plt.rcParams["xtick.labelsize"] == 18.9
+        assert plt.rcParams["ytick.labelsize"] == 18.9
+        assert plt.rcParams["legend.fontsize"] == 18.9
+
+        canvas_width, canvas_height, _, colorbars = preview.fullsky.pixel_layout(
+            800,
+            2.0,
+        )
+        assert (canvas_width, canvas_height) == (3380, 2325)
+        assert [bottom for _, bottom, _, _ in colorbars] == [
+            1370,
+            1370,
+            195,
+            195,
+        ]
+        assert all(height == 30 for _, _, _, height in colorbars)
+        latex_scale = (440.0 / 72.27) / (canvas_width / 220.0)
+        assert (
+            plt.rcParams["axes.titlesize"]
+            * latex_scale
+            * tex_points_per_matplotlib_point
+        ) == pytest.approx(9.0, abs=0.03)
+        assert (
+            plt.rcParams["axes.labelsize"]
+            * latex_scale
+            * tex_points_per_matplotlib_point
+        ) == pytest.approx(8.0, abs=0.03)
+        assert (
+            plt.rcParams["xtick.labelsize"]
+            * latex_scale
+            * tex_points_per_matplotlib_point
+        ) == pytest.approx(7.5, abs=0.03)
 
 
 def test_read_subhalo_values_sums_only_native_scientific_components(tmp_path):

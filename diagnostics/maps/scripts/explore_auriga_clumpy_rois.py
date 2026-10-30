@@ -58,10 +58,10 @@ ROI_CENTERS = {
     "roi_04": (340.0, 5.0),
 }
 # Compensate for scaling the 13-inch PDF to a 440 TeX pt text width.
-PANEL_TITLE_FONTSIZE = 22.3
-LABEL_FONTSIZE = 20.2
-TICK_FONTSIZE = 18.1
-LEGEND_FONTSIZE = 18.1
+PANEL_TITLE_FONTSIZE = 19.1
+LABEL_FONTSIZE = 17.0
+TICK_FONTSIZE = 16.0
+LEGEND_FONTSIZE = 16.0
 
 
 @dataclass(frozen=True)
@@ -572,7 +572,7 @@ def _render_comparison(
         bottom=0.24,
         top=0.93,
         wspace=0.10,
-        hspace=0.36,
+        hspace=0.38,
     )
     rendered_counts = {}
 
@@ -617,10 +617,14 @@ def _render_comparison(
             )
             if row == 1:
                 axes_item.set_xlabel(
-                    r"Galactic longitude offset $\Delta\ell$ [deg]"
+                    r"Galactic longitude offset $\Delta\ell$ [deg]",
+                    labelpad=6.0,
                 )
             if column == 0:
-                axes_item.set_ylabel(r"Galactic latitude offset $\Delta b$ [deg]")
+                axes_item.set_ylabel(
+                    r"Galactic latitude offset $\Delta b$ [deg]",
+                    labelpad=6.0,
+                )
             axes_item.set_title(
                 scenario.capitalize(),
                 pad=9.0,
@@ -656,13 +660,13 @@ def _render_comparison(
         colorbar.set_ticks(colorbar_ticks)
         colorbar.ax.xaxis.set_major_formatter(FuncFormatter(scientific_tick_label))
         colorbar.ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
-        colorbar.ax.tick_params(labelsize=TICK_FONTSIZE)
+        colorbar.ax.tick_params(labelsize=TICK_FONTSIZE, pad=4.5)
         symbol = (
             r"J_{\mathrm{sub}}" if field_name == "J_sub" else r"J_{\mathrm{tot}}"
         )
         colorbar.set_label(
             rf"${symbol}\;[\mathrm{{GeV^2\,cm^{{-5}}}}]$",
-            labelpad=5.0,
+            labelpad=6.0,
         )
         colorbar_axes.append(colorbar_axis)
         colorbar_diagnostics.append(
