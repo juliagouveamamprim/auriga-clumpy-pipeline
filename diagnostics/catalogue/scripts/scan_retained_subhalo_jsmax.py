@@ -44,6 +44,7 @@ from prepare_subhalo_components import build_valid_mask  # noqa: E402
 SCENARIOS = ("fragile", "resilient")
 DEFAULT_NSIDE = 2048
 DEFAULT_CHUNK_SIZE = 500_000
+PROGRESS_INTERVAL_ROWS = 10_000_000
 SCHEMA_VERSION = 1
 REQUIRED_COLUMNS = (
     "Js",
@@ -535,6 +536,7 @@ def scan_catalog(
             for coordinate in ("Xearth", "Yearth", "Zearth"):
                 _validate_unit(unit_map[coordinate], u.kpc, coordinate)
 
+            next_progress_row = PROGRESS_INTERVAL_ROWS
             for start in range(0, data.shape[0], chunk_size):
                 stop = min(start + chunk_size, data.shape[0])
                 arr = np.asarray(data[start:stop])
@@ -647,6 +649,18 @@ def scan_catalog(
                             classification=component,
                         ),
                     )
+
+                if stop >= next_progress_row:
+                    percentage = 100.0 * stop / data.shape[0]
+                    print(
+                        f"progress: processed={stop:,} rows, "
+                        f"total={data.shape[0]:,} rows "
+                        f"({percentage:.1f}%)",
+                        flush=True,
+                    )
+                    next_progress_row = (
+                        stop // PROGRESS_INTERVAL_ROWS + 1
+                    ) * PROGRESS_INTERVAL_ROWS
 
             catalog_n_rows = int(data.shape[0])
     except OSError as error:
@@ -934,6 +948,7 @@ def process_case(
     diagnostic_git_commit: str,
     overwrite: bool = False,
 ) -> str:
+    print(f"starting: {scenario} repop_{repop_id:04d}", flush=True)
     summary_exists = paths.output_csv.exists()
     retained_exists = paths.retained_catalog.exists()
     if summary_exists and retained_exists and not overwrite:
@@ -1016,6 +1031,11 @@ def process_case(
     finally:
         if temporary_catalog.exists():
             temporary_catalog.unlink()
+    print(
+        f"completed: {scenario} repop_{repop_id:04d}: "
+        f"retained pointlike={retained_pointlike:,}, extended={len(extended_rows):,}",
+        flush=True,
+    )
     return "written"
 
 

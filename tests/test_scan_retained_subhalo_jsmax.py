@@ -226,6 +226,29 @@ def test_process_case_selects_production_membership_and_brightest(tmp_path):
     ) == "skipped"
 
 
+def test_process_case_reports_progress_and_completion(tmp_path, monkeypatch, capsys):
+    paths = make_case(tmp_path)
+    monkeypatch.setattr(diagnostic, "PROGRESS_INTERVAL_ROWS", 2)
+
+    diagnostic.process_case(
+        paths=paths,
+        scenario="fragile",
+        repop_id=0,
+        nside=8,
+        chunk_size=1,
+        production_git_commit="production-commit",
+        diagnostic_git_commit="diagnostic-commit",
+    )
+
+    assert capsys.readouterr().out.splitlines() == [
+        "starting: fragile repop_0000",
+        "progress: processed=2 rows, total=6 rows (33.3%)",
+        "progress: processed=4 rows, total=6 rows (66.7%)",
+        "progress: processed=6 rows, total=6 rows (100.0%)",
+        "completed: fragile repop_0000: retained pointlike=2, extended=2",
+    ]
+
+
 def test_corrected_list_log_order_mismatch_fails_before_catalog_scan(tmp_path):
     paths = make_case(tmp_path, reverse_log=True)
     paths.catalog.unlink()
