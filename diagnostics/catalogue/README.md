@@ -1,5 +1,52 @@
 # Catalogue diagnostics
 
+## Brightest retained production subhalo
+
+`scripts/scan_retained_subhalo_jsmax.py` identifies the retained pointlike and
+extended populations for each completed CLUMPY case and records the retained
+subhalo with the largest catalogue `Js`.  Pointlike membership reuses
+`build_valid_mask()` and the effective `THETACUT`/`JCPL` stored in the
+pointlike FITS.  Extended membership comes from the corrected external-halo
+list and must match the corrected `halo_rendered.log` exactly in count, name,
+type, and order.
+
+The catalogue is read once in bounded chunks.  The pointlike map columns are
+not read, and the diagnostic deliberately does not compare summed catalogue
+`Js` with the pointlike FITS map.  Every retained object is streamed during
+that same pass to:
+
+    retained_subhalos_<scenario>_repop_XXXX_nside<NSIDE>.csv.gz
+
+The compressed catalogue contains `halo_name`, the zero-based `hdf5_row`,
+component, and the exact HDF5 values of `Js`, `theta_s`, `D_Earth`, `Vmax`,
+`r_s`, `rho_s`, `Cv`, `Xearth`, `Yearth`, and `Zearth`.  The one-row summary is
+written as:
+
+    retained_jsmax_<scenario>_repop_XXXX_nside<NSIDE>.csv
+
+It records the brightest retained object, counts, cuts, provenance, source
+paths, and the retained-catalogue SHA-256.  Both files must exist and validate
+before a case is skipped on restart.  Each file is published atomically, with
+the summary written last as the completion checkpoint.
+
+Example for the audited initial Lattes case:
+
+    python3 -u diagnostics/catalogue/scripts/scan_retained_subhalo_jsmax.py \
+        fragile \
+        --start-id 0 \
+        --end-id 0 \
+        --nside 2048 \
+        --catalog-root /path/to/Auriga_outputs_hdf5_v2 \
+        --clumpy-root /path/to/auriga-clumpy-pipeline/outputs/clumpy \
+        --output-dir /path/to/diagnostic_outputs/retained_jsmax \
+        --production-git-commit 07f693821e70f61f5f9bf86405896e7a613d8130
+
+Use `scenario=both` for both disruption scenarios.  Inclusive repopulation
+ranges are selected with `--start-id` and `--end-id`.  A rerun validates and
+skips an existing case CSV unless `--overwrite` is supplied.  An optional
+`--merge-output PATH` deterministically merges only the cases selected by the
+current command.
+
 ## Minimum-DGC-distance distribution
 
 `scripts/plot_dmin_distribution.py` reads `scenario`, `repop_id`, and
