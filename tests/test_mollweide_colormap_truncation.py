@@ -41,6 +41,7 @@ def test_default_colormap_is_unchanged():
     samples = np.linspace(0.0, 1.0, 257)
 
     assert prototype.parse_args([]).cmap_min_fraction == 0.0
+    assert prototype.parse_args([]).pointlike_cmap_min_fraction is None
     np.testing.assert_array_equal(displayed(samples), source(samples))
 
 
@@ -99,6 +100,62 @@ def test_invalid_colormap_min_fraction_is_rejected(minimum):
         match=r"--cmap-min-fraction must satisfy 0 <= value < 1",
     ):
         prototype.validate_args(args)
+
+
+@pytest.mark.parametrize("minimum", [-0.01, 1.0, 1.01, float("nan")])
+def test_invalid_pointlike_colormap_min_fraction_is_rejected(minimum):
+    args = prototype.parse_args(
+        ["--pointlike-cmap-min-fraction", str(minimum)]
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"--pointlike-cmap-min-fraction must satisfy 0 <= value < 1"
+        ),
+    ):
+        prototype.validate_args(args)
+
+
+def test_pointlike_override_uses_same_base_colormap_only_for_pointlike():
+    args = prototype.parse_args(
+        [
+            "--cmap",
+            "rainbow",
+            "--cmap-min-fraction",
+            "0.0",
+            "--pointlike-cmap-min-fraction",
+            "0.2",
+        ]
+    )
+    colormaps = prototype.component_colormaps(args)
+    source = matplotlib.colormaps["rainbow"]
+
+    for component in prototype.COMPONENTS:
+        expected_minimum = 0.2 if component.key == "pointlike" else 0.0
+        np.testing.assert_allclose(
+            colormaps[component.key](0.0),
+            source(expected_minimum),
+        )
+
+
+def test_pointlike_override_is_included_in_default_output_filenames():
+    args = prototype.parse_args(
+        [
+            "--cmap",
+            "rainbow",
+            "--cmap-min-fraction",
+            "0.0",
+            "--pointlike-cmap-min-fraction",
+            "0.2",
+        ]
+    )
+    pngs, json_path, npz_path = prototype.output_paths(args)
+
+    expected_marker = "_rainbow_pointlikecmapmin0p2_full"
+    assert all(expected_marker in path.name for path in pngs.values())
+    assert expected_marker in json_path.name
+    assert expected_marker in npz_path.name
 
 
 def test_log_rasters_preserve_zero_sentinel_and_outside_mask():
@@ -196,3 +253,67 @@ def test_map_and_colorbars_share_the_same_truncated_colormap(tmp_path, monkeypat
         zero_cmap(0.0),
         matplotlib.colors.to_rgba(args.zero_color),
     )
+
+
+def test_pointlike_map_and_colorbar_share_override_colormap(tmp_path, monkeypatch):
+    args = prototype.parse_args(
+        [
+            "--xsize",
+            "8",
+            "--panel-scale",
+            "1",
+            "--dpi",
+            "72",
+            "--cmap",
+            "rainbow",
+            "--cmap-min-fraction",
+            "0.0",
+            "--pointlike-cmap-min-fraction",
+            "0.2",
+            "--no-graticule",
+        ]
+    )
+    geometry = prototype.make_conservative_geometry(args.xsize)
+    raster = np.full(geometry.inside.shape, np.nan)
+    raster[geometry.inside] = prototype.ZERO_SENTINEL
+    raster.ravel()[geometry.valid_flat_cells[0]] = 1.0
+    projected = {
+        scenario: {component.key: raster for component in prototype.COMPONENTS}
+        for scenario in prototype.SCENARIOS
+    }
+    limits = {component.key: (1.0, 2.0) for component in prototype.COMPONENTS}
+    map_colormaps = []
+    colorbar_colormaps = []
+    original_imshow = matplotlib.axes.Axes.imshow
+    original_colorbar = matplotlib.figure.Figure.colorbar
+
+    def record_imshow(self, *imshow_args, **imshow_kwargs):
+        if isinstance(imshow_kwargs.get("norm"), matplotlib.colors.Normalize):
+            map_colormaps.append(imshow_kwargs["cmap"])
+        return original_imshow(self, *imshow_args, **imshow_kwargs)
+
+    def record_colorbar(self, mappable, *colorbar_args, **colorbar_kwargs):
+        colorbar_colormaps.append(mappable.cmap)
+        return original_colorbar(self, mappable, *colorbar_args, **colorbar_kwargs)
+
+    monkeypatch.setattr(matplotlib.axes.Axes, "imshow", record_imshow)
+    monkeypatch.setattr(matplotlib.figure.Figure, "colorbar", record_colorbar)
+
+    prototype.render_figure(
+        "fragile",
+        projected,
+        limits,
+        tmp_path / "preview.png",
+        args,
+    )
+
+    assert len(map_colormaps) == len(colorbar_colormaps) == 4
+    assert all(
+        map_cmap is colorbar_cmap
+        for map_cmap, colorbar_cmap in zip(map_colormaps, colorbar_colormaps)
+    )
+    assert map_colormaps[0] is map_colormaps[2] is map_colormaps[3]
+    assert map_colormaps[1] is not map_colormaps[0]
+    source = matplotlib.colormaps["rainbow"]
+    np.testing.assert_allclose(map_colormaps[0](0.0), source(0.0))
+    np.testing.assert_allclose(map_colormaps[1](0.0), source(0.2))

@@ -450,6 +450,19 @@ def display_colormap(
     return cmap
 
 
+def component_colormaps(
+    args: argparse.Namespace,
+) -> dict[str, matplotlib.colors.Colormap]:
+    global_cmap = display_colormap(args.cmap, args.cmap_min_fraction)
+    colormaps = {component.key: global_cmap for component in COMPONENTS}
+    if args.pointlike_cmap_min_fraction is not None:
+        colormaps["pointlike"] = display_colormap(
+            args.cmap,
+            args.pointlike_cmap_min_fraction,
+        )
+    return colormaps
+
+
 def render_figure(
     scenario: str,
     projected: dict[str, dict[str, np.ndarray]],
@@ -478,7 +491,7 @@ def render_figure(
         flipconv="astro",
     )
     zero_cmap = ListedColormap([args.zero_color])
-    base_cmap = display_colormap(args.cmap, args.cmap_min_fraction)
+    colormaps = component_colormaps(args)
 
     for panel_index, component in enumerate(COMPONENTS):
         origin = panel_origins[panel_index]
@@ -518,7 +531,7 @@ def render_figure(
             origin="lower",
             extent=(-2.0, 2.0, -1.0, 1.0),
             interpolation="nearest",
-            cmap=base_cmap,
+            cmap=colormaps[component.key],
             norm=Normalize(vmin=vmin, vmax=vmax, clip=False),
             rasterized=True,
         )
@@ -553,7 +566,10 @@ def render_figure(
         vmin, vmax = limits[component.key]
         normalization = Normalize(vmin=vmin, vmax=vmax, clip=False)
         colorbar = figure.colorbar(
-            ScalarMappable(norm=normalization, cmap=base_cmap),
+            ScalarMappable(
+                norm=normalization,
+                cmap=colormaps[component.key],
+            ),
             cax=colorbar_axes,
             orientation="horizontal",
             extend="neither",
@@ -711,6 +727,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "J-factor values; must satisfy 0 <= value < 1 (default: 0.0)."
         ),
     )
+    parser.add_argument(
+        "--pointlike-cmap-min-fraction",
+        type=float,
+        default=None,
+        help=(
+            "Optional lower fraction of the selected colormap used only for "
+            "Pointlike subhalos; when omitted, --cmap-min-fraction is used. "
+            "Must satisfy 0 <= value < 1."
+        ),
+    )
     parser.add_argument("--zero-color", default="#151515")
     parser.add_argument("--outside-color", default="white")
     parser.add_argument("--graticule-color", default="#b8b8b8")
@@ -749,6 +775,13 @@ def validate_args(args: argparse.Namespace) -> None:
         0.0 <= args.cmap_min_fraction < 1.0
     ):
         raise ValueError("--cmap-min-fraction must satisfy 0 <= value < 1.")
+    if args.pointlike_cmap_min_fraction is not None and (
+        not np.isfinite(args.pointlike_cmap_min_fraction)
+        or not 0.0 <= args.pointlike_cmap_min_fraction < 1.0
+    ):
+        raise ValueError(
+            "--pointlike-cmap-min-fraction must satisfy 0 <= value < 1."
+        )
     if args.basename is not None and Path(args.basename).name != args.basename:
         raise ValueError("--basename must be a filename stem, not a path.")
     for argument in ("zero_color", "outside_color", "graticule_color"):
@@ -774,10 +807,20 @@ def output_paths(
         if args.cmap_min_fraction == 0.0
         else f"_cmapmin{args.cmap_min_fraction:g}".replace(".", "p")
     )
+    pointlike_cmap_fraction_suffix = (
+        ""
+        if args.pointlike_cmap_min_fraction is None
+        else (
+            f"_pointlikecmapmin{args.pointlike_cmap_min_fraction:g}".replace(
+                ".", "p"
+            )
+        )
+    )
     basename = args.basename or (
         f"auriga_clumpy_conservative_sum_repop_{args.repop_id:04d}_"
         f"nside{args.nside}_xsize{args.xsize}_{args.cmap}"
-        f"{cmap_fraction_suffix}_{args.normalization}"
+        f"{cmap_fraction_suffix}{pointlike_cmap_fraction_suffix}_"
+        f"{args.normalization}"
     )
     pngs = {
         scenario: output_dir / f"{basename}_{scenario}.png"
@@ -1428,6 +1471,7 @@ def write_diagnostics(
         "rendering": {
             "cmap": args.cmap,
             "cmap_min_fraction": args.cmap_min_fraction,
+            "pointlike_cmap_min_fraction": args.pointlike_cmap_min_fraction,
             "zero_color": args.zero_color,
             "interpolation": "nearest",
             "formats": list(args.formats),
