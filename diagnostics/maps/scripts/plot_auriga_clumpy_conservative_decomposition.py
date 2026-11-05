@@ -425,8 +425,19 @@ def rectangle_fraction(
     )
 
 
-def display_colormap(name: str) -> matplotlib.colors.Colormap:
-    cmap = matplotlib.colormaps[name].copy()
+def display_colormap(
+    name: str,
+    min_fraction: float = 0.0,
+) -> matplotlib.colors.Colormap:
+    source = matplotlib.colormaps[name]
+    if min_fraction == 0.0:
+        cmap = source.copy()
+    else:
+        colors = source(np.linspace(min_fraction, 1.0, source.N))
+        cmap = ListedColormap(
+            colors,
+            name=f"{name}_truncated_{min_fraction:g}_1",
+        )
     cmap.set_under(cmap(0.0))
     cmap.set_bad((0.0, 0.0, 0.0, 0.0))
     return cmap
@@ -460,7 +471,7 @@ def render_figure(
         flipconv="astro",
     )
     zero_cmap = ListedColormap([args.zero_color])
-    base_cmap = display_colormap(args.cmap)
+    base_cmap = display_colormap(args.cmap, args.cmap_min_fraction)
 
     for panel_index, component in enumerate(COMPONENTS):
         origin = panel_origins[panel_index]
@@ -684,6 +695,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         choices=conventional.SUPPORTED_COLORMAPS,
         default="viridis",
     )
+    parser.add_argument(
+        "--cmap-min-fraction",
+        type=float,
+        default=0.0,
+        help=(
+            "Lower fraction of the selected colormap used for positive "
+            "J-factor values; must satisfy 0 <= value < 1 (default: 0.0)."
+        ),
+    )
     parser.add_argument("--zero-color", default="#151515")
     parser.add_argument("--outside-color", default="white")
     parser.add_argument("--graticule-color", default="#b8b8b8")
@@ -718,6 +738,10 @@ def validate_args(args: argparse.Namespace) -> None:
         <= 100.0
     ):
         raise ValueError("Percentiles must satisfy 0 <= lower < upper <= 100.")
+    if not np.isfinite(args.cmap_min_fraction) or not (
+        0.0 <= args.cmap_min_fraction < 1.0
+    ):
+        raise ValueError("--cmap-min-fraction must satisfy 0 <= value < 1.")
     if args.basename is not None and Path(args.basename).name != args.basename:
         raise ValueError("--basename must be a filename stem, not a path.")
     for argument in ("zero_color", "outside_color", "graticule_color"):
@@ -738,9 +762,15 @@ def output_paths(
         / "auriga_clumpy_conservative_decomposition"
         / f"repop_{args.repop_id:04d}"
     )
+    cmap_fraction_suffix = (
+        ""
+        if args.cmap_min_fraction == 0.0
+        else f"_cmapmin{args.cmap_min_fraction:g}".replace(".", "p")
+    )
     basename = args.basename or (
         f"auriga_clumpy_conservative_sum_repop_{args.repop_id:04d}_"
-        f"nside{args.nside}_xsize{args.xsize}_{args.cmap}_{args.normalization}"
+        f"nside{args.nside}_xsize{args.xsize}_{args.cmap}"
+        f"{cmap_fraction_suffix}_{args.normalization}"
     )
     pngs = {
         scenario: output_dir / f"{basename}_{scenario}.png"
@@ -1390,6 +1420,7 @@ def write_diagnostics(
         },
         "rendering": {
             "cmap": args.cmap,
+            "cmap_min_fraction": args.cmap_min_fraction,
             "zero_color": args.zero_color,
             "interpolation": "nearest",
             "formats": list(args.formats),
