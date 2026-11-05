@@ -37,7 +37,14 @@ PIXEL_COLUMN = "PIXEL"
 DEFAULT_NSIDE = 2048
 DEFAULT_XSIZE = 800
 DEFAULT_CHUNK_SIZE = 1_000_000
-SUPPORTED_COLORMAPS = ("magma", "plasma", "turbo", "viridis")
+SUPPORTED_COLORMAPS = (
+    "magma",
+    "plasma",
+    "turbo",
+    "viridis",
+    "cool",
+    "rainbow",
+)
 SUPPORTED_OUTPUT_FORMATS = ("png", "pdf")
 EXPECTED_UNIT = u.GeV**2 / u.cm**5
 CLUMPY_EMPTY_JEXTENDED = np.float32(1.0e-40)

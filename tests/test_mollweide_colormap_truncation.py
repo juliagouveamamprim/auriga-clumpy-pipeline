@@ -44,6 +44,27 @@ def test_default_colormap_is_unchanged():
     np.testing.assert_array_equal(displayed(samples), source(samples))
 
 
+@pytest.mark.parametrize(
+    "cmap_name",
+    ("magma", "plasma", "turbo", "viridis", "cool", "rainbow"),
+)
+def test_all_supported_colormap_choices_are_accepted(cmap_name):
+    assert prototype.parse_args(["--cmap", cmap_name]).cmap == cmap_name
+
+
+@pytest.mark.parametrize("cmap_name", ["cool", "rainbow"])
+def test_new_colormaps_are_not_truncated_at_zero_minimum(cmap_name):
+    args = prototype.parse_args(
+        ["--cmap", cmap_name, "--cmap-min-fraction", "0.0"]
+    )
+    source = matplotlib.colormaps[cmap_name]
+    displayed = prototype.display_colormap(args.cmap, args.cmap_min_fraction)
+    samples = np.linspace(0.0, 1.0, 257)
+
+    assert args.cmap_min_fraction == 0.0
+    np.testing.assert_array_equal(displayed(samples), source(samples))
+
+
 @pytest.mark.parametrize("minimum", [0.20, 0.30])
 def test_truncated_colormap_samples_requested_interval(minimum):
     source = matplotlib.colormaps["viridis"]
