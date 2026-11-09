@@ -35,13 +35,14 @@
   },
   rowbox/.style={
     box,
-    minimum width=2.70cm,
+    minimum width=2.45cm,
     minimum height=1.45cm,
-    text width=2.40cm,
+    text width=2.15cm,
     font=\small
   },
   rowgreen/.style={rowbox,fill=paper,draw=muted},
   rowpink/.style={rowbox,fill=extendedcolor!9,draw=extendedcolor!80!black},
+  rowcompact/.style={minimum width=2.10cm,text width=1.80cm},
   lowerbox/.style={
     box,
     minimum width=2.70cm,
@@ -78,8 +79,8 @@
     box,
     fill=extendedcolor!10,
     draw=extendedcolor!80!black,
-    minimum width=5.25cm,
-    text width=4.95cm
+    minimum width=4.80cm,
+    text width=4.50cm
   },
   iolabel/.style={
     text=muted,
@@ -122,32 +123,35 @@
   \node[catalogue] (catalogues) at (0,0)
     {Repopulated catalogs\\(fragile \& resilient)};
 
-  \node[rowgreen,right=0.60cm of catalogues] (classify)
+  \node[rowgreen,right=0.60cm of catalogues] (darkselection)
+    {Dark-subhalo\\selection\\{\scriptsize \((V_{\max}\leq 8\,\mathrm{km\,s^{-1}})\)}};
+
+  \node[rowgreen,right=0.60cm of darkselection] (classify)
     {Classify subhalos:\\point-like or\\extended};
 
-  \node[rowgreen,right=0.60cm of classify] (cuts)
+  \node[rowgreen,rowcompact,right=0.60cm of classify] (cuts)
     {Catalog reduction\\cuts};
 
-  \node[rowpink,right=0.60cm of cuts] (lists)
+  \node[rowpink,rowcompact,right=0.60cm of cuts] (lists)
     {Extended subhalo\\lists};
 
-  \node[rowpink,right=0.60cm of lists] (raw)
+  \node[rowpink,rowcompact,right=0.60cm of lists] (raw)
     {Raw CLUMPY\\rendering};
 
   % Lower point-like and corrected-CLUMPY branches.
   \node[pointlike] (pointmap) at ($(cuts.center)+(0,-2.05)$)
     {Point-like HEALPix\\map};
 
-  \node[comparison] (compare) at (11.75,-2.05)
+  \node[comparison] (compare) at (13.85,-2.05)
     {Compare rendered vs. catalog \(J_s\)\\and correct \(\rho_s\) in lists};
 
-  \node[lowerpink] (corrected) at (11.75,-4.10)
+  \node[lowerpink] (corrected) at (13.30,-4.10)
     {Corrected CLUMPY\\rendering};
 
   \node[outputmap] (smoothmap) at ($(cuts.center)+(0,-4.10)$)
     {Smooth MW +\\extended subhalos\\HEALPix map};
 
-  \node[final] (finalmap) at (3.05,-3.08)
+  \node[final] (finalmap) at (4.98,-3.08)
     {Final \(J\)-factor\\template};
 
   \node[auxoutput] (boost) at (0,-2.25)
@@ -168,11 +172,12 @@
     ([xshift=-0.10cm,yshift=0.08cm]finalmap.north east)
     node[midway,above=5pt,iolabel] {OUTPUT - FITS};
 
-  \coordinate (merge) at (5.10,-3.08);
+  \coordinate (merge) at (7.03,-3.08);
 
   % Arrows are drawn behind the nodes so no connector crosses text.
   \begin{scope}[on background layer]
-    \draw[flow] (catalogues.east) -- (classify.west);
+    \draw[flow] (catalogues.east) -- (darkselection.west);
+    \draw[flow] (darkselection.east) -- (classify.west);
     \draw[flow] (classify.east) -- (cuts.west);
     \draw[flow] (cuts.east) -- (lists.west);
     \draw[flow] (lists.east) -- (raw.west);
@@ -185,7 +190,9 @@
     \draw[flow] (cuts.south) -- (pointmap.north);
 
     \draw[flow] (raw.south) -- (raw.south |- compare.north);
-    \draw[flow] (compare.south) -- (corrected.north);
+    \draw[flow] (raw.south |- compare.south)
+      -- (raw.south |- corrected.east)
+      -- (corrected.east);
     \draw[flow] (corrected.west) -- (smoothmap.east);
 
     \draw[mergepath] (pointmap.west) -- (merge);
