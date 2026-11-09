@@ -166,6 +166,29 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--max-vmax-km-s",
+        type=float,
+        default=None,
+        help=(
+            "Optional inclusive physical-selection boundary in km/s. "
+            "When set, otherwise-valid subhalos are eligible only when "
+            "Vmax <= this value. The default (unset) preserves the full "
+            "population."
+        ),
+    )
+
+    parser.add_argument(
+        "--clumpy-root",
+        type=Path,
+        default=None,
+        help=(
+            "Output root containing scenario directories. By default the "
+            "full population uses outputs/clumpy, while a Vmax-selected "
+            "population uses an isolated selection-specific subdirectory."
+        ),
+    )
+
+    parser.add_argument(
         "--theta-aperture-deg",
         type=float,
         default=None,
@@ -217,7 +240,39 @@ def get_input_h5(repop_id, scenario, catalog_root=BASE_H5_DIR):
     return get_h5_dir(repop_id, catalog_root) / f"fullrepop_hydro_{scenario}.h5"
 
 
-def get_output_list(repop_id, scenario, top_n, nside=NSIDE):
+def vmax_selection_tag(max_vmax_km_s):
+    """Return the stable output namespace for an inclusive Vmax selection."""
+    if max_vmax_km_s is None:
+        return None
+    value = float(max_vmax_km_s)
+    if not np.isfinite(value) or value <= 0.0:
+        raise ValueError("max_vmax_km_s must be finite and positive.")
+    text = np.format_float_positional(value, trim="-").replace(".", "p")
+    return f"dark_vmax_le_{text}kms"
+
+
+def get_clumpy_root(max_vmax_km_s=None, clumpy_root=None):
+    """Resolve the population-specific output root without changing defaults."""
+    tag = vmax_selection_tag(max_vmax_km_s)
+    if clumpy_root is not None:
+        root = Path(clumpy_root)
+        if tag is not None and root.name != tag:
+            raise ValueError(
+                "A Vmax-selected output root must end with its selection "
+                f"namespace {tag!r}; got {root}."
+            )
+        return root
+    return BASE_RUN_DIR if tag is None else BASE_RUN_DIR / tag
+
+
+def get_output_list(
+    repop_id,
+    scenario,
+    top_n,
+    nside=NSIDE,
+    max_vmax_km_s=None,
+    clumpy_root=None,
+):
     """
     Return output CLUMPY raw list path.
 
@@ -232,7 +287,7 @@ def get_output_list(repop_id, scenario, top_n, nside=NSIDE):
     filename = base + ".txt"
 
     return (
-        BASE_RUN_DIR
+        get_clumpy_root(max_vmax_km_s, clumpy_root)
         / scenario
         / "lists"
         / "raw"
@@ -240,10 +295,16 @@ def get_output_list(repop_id, scenario, top_n, nside=NSIDE):
     )
 
 
-def get_output_pointlike_fits(repop_id, scenario, nside):
+def get_output_pointlike_fits(
+    repop_id,
+    scenario,
+    nside,
+    max_vmax_km_s=None,
+    clumpy_root=None,
+):
     """Return output path for the pointlike-only HEALPix FITS map."""
     return (
-        BASE_RUN_DIR
+        get_clumpy_root(max_vmax_km_s, clumpy_root)
         / scenario
         / "pointlike"
         / f"repop_{repop_id:04d}_pointlike_nside{nside}.fits"
@@ -326,6 +387,7 @@ def write_header(
     chunk_size,
     halo_type,
     top_n,
+    max_vmax_km_s=None,
     cut_metadata=None,
 ):
     """
@@ -348,6 +410,11 @@ def write_header(
         f"# Conservative threshold: {theta_min_deg:.6f} deg",
         f"# Chunk size used while reading HDF5: {chunk_size}",
         f"# TOP_N after non-point-like cut: {top_n}",
+        (
+            "# Physical Vmax selection: disabled (full population)"
+            if max_vmax_km_s is None
+            else f"# Physical Vmax selection: Vmax <= {max_vmax_km_s} km/s"
+        ),
         "#",
         "# HDF5 columns are identified by the column_names attribute.",
         "# Required columns: Js, D_Earth, theta_s, r_s, rho_s,",
@@ -461,6 +528,7 @@ def write_pointlike_fits(
     theta_cut_deg,
     n_pointlike,
     n_pointlike_total=None,
+    max_vmax_km_s=None,
     cut_metadata=None,
 ):
     """Write the pointlike component as a CLUMPY-compatible HEALPix FITS."""
@@ -541,6 +609,15 @@ def write_pointlike_fits(
             n_pointlike,
             "Number of pointlike subhalos in this map",
         )
+        hdu.header["VMAXCUT"] = (
+            max_vmax_km_s is not None,
+            "Inclusive physical Vmax selection applied",
+        )
+        if max_vmax_km_s is not None:
+            hdu.header["VMAXMAX"] = (
+                float(max_vmax_km_s),
+                "Maximum eligible Vmax [km/s]",
+            )
         if n_pointlike_total is not None:
             hdu.header["NPTOTAL"] = (
                 n_pointlike_total,
@@ -609,6 +686,7 @@ def validate_existing_pointlike_fits(
     theta_cut_deg,
     pointlike_cut_f=None,
     j_pixel_ref=None,
+    max_vmax_km_s=None,
     check_cut_metadata=True,
 ):
     """Return whether an existing pointlike FITS can be safely reused.
@@ -721,6 +799,24 @@ def validate_existing_pointlike_fits(
                     expected_pixel_area,
                 ):
                     return False, f"{label}: PIXAREA does not match"
+
+                expected_vmax_cut = max_vmax_km_s is not None
+                stored_vmax_cut = hdu.header.get("VMAXCUT")
+                if expected_vmax_cut:
+                    if stored_vmax_cut is not True:
+                        return False, f"{label}: VMAXCUT does not match"
+                    if not matching_float(
+                        hdu.header.get("VMAXMAX"), max_vmax_km_s
+                    ):
+                        return False, f"{label}: VMAXMAX does not match"
+                else:
+                    # A missing VMAXCUT is the legacy full-population format.
+                    # It remains reusable so existing production commands do
+                    # not rewrite otherwise-valid products after this change.
+                    if stored_vmax_cut not in (None, False):
+                        return False, f"{label}: VMAXCUT does not match"
+                    if "VMAXMAX" in hdu.header:
+                        return False, f"{label}: unexpected VMAXMAX metadata"
 
                 n_pointlike = hdu.header.get("NPOINT")
                 n_pointlike_total = hdu.header.get("NPTOTAL")
@@ -962,6 +1058,7 @@ def compute_pixel_reference(
     theta_min_deg,
     nside,
     chunk_size,
+    max_vmax_km_s=None,
     progress_label=None,
 ):
     """
@@ -997,6 +1094,17 @@ def compute_pixel_reference(
             y_e=y_e,
             z_e=z_e,
         )
+
+        if max_vmax_km_s is not None:
+            vmax = arr[:, column_indices["Vmax"]]
+            bad_vmax = valid & (~np.isfinite(vmax) | (vmax <= 0.0))
+            if np.any(bad_vmax):
+                row = start_row + int(np.flatnonzero(bad_vmax)[0])
+                raise ValueError(
+                    "Invalid Vmax for otherwise-valid halo at "
+                    f"catalogue row {row}."
+                )
+            valid &= vmax <= max_vmax_km_s
 
         mask_pointlike = valid & (theta_s < theta_min_deg)
         mask_extended = valid & (theta_s >= theta_min_deg)
@@ -1056,6 +1164,7 @@ def prepare_subhalo_components(
     pointlike_cut_f=None,
     theta_aperture_deg=None,
     force_pointlike=False,
+    max_vmax_km_s=None,
 ):
     """
     Build the extended CLUMPY list and pointlike HEALPix map.
@@ -1071,6 +1180,10 @@ def prepare_subhalo_components(
             "no longer guaranteed to be sorted by J-factor. Use explicit "
             "J-factor cuts instead."
         )
+
+    if max_vmax_km_s is not None:
+        max_vmax_km_s = float(max_vmax_km_s)
+        vmax_selection_tag(max_vmax_km_s)
 
     input_h5 = Path(input_h5)
     output_list = Path(output_list)
@@ -1113,6 +1226,7 @@ def prepare_subhalo_components(
     total_seen = 0
     total_valid = 0
     total_invalid = 0
+    total_vmax_excluded = 0
 
     total_extended = 0
     total_extended_cut_kept = 0
@@ -1171,6 +1285,9 @@ def prepare_subhalo_components(
             "Zearth",
         ]
 
+        if max_vmax_km_s is not None:
+            required_columns.append("Vmax")
+
         missing_columns = [
             name for name in required_columns
             if name not in column_names
@@ -1213,6 +1330,13 @@ def prepare_subhalo_components(
         print(f"Pointlike: theta_s <  {theta_min_deg:.6f} deg")
         print(f"TOP_N for extended list: {top_n}")
         print(f"Chunk size: {chunk_size:,}")
+        if max_vmax_km_s is None:
+            print("Physical Vmax selection: disabled (full population)")
+        else:
+            print(
+                "Physical Vmax selection: "
+                f"Vmax <= {max_vmax_km_s:g} km/s"
+            )
 
         cut_metadata = None
         extended_j_cut = None
@@ -1236,6 +1360,7 @@ def prepare_subhalo_components(
                 theta_min_deg=theta_min_deg,
                 nside=nside,
                 chunk_size=chunk_size,
+                max_vmax_km_s=max_vmax_km_s,
             )
 
             j_pixel_ref = ref_info["j_pixel_ref"]
@@ -1277,6 +1402,7 @@ def prepare_subhalo_components(
                 theta_cut_deg=theta_min_deg,
                 pointlike_cut_f=pointlike_cut_f,
                 j_pixel_ref=j_pixel_ref,
+                max_vmax_km_s=max_vmax_km_s,
             )
 
         generate_pointlike = not reuse_pointlike
@@ -1308,6 +1434,7 @@ def prepare_subhalo_components(
                 chunk_size=chunk_size,
                 halo_type=halo_type,
                 top_n=top_n,
+                max_vmax_km_s=max_vmax_km_s,
                 cut_metadata=cut_metadata,
             )
 
@@ -1341,8 +1468,26 @@ def prepare_subhalo_components(
                     z_e=z_e,
                 )
 
-                mask_extended = valid & (theta_s >= theta_min_deg)
-                mask_pointlike = valid & (theta_s < theta_min_deg)
+                eligible = valid
+                if max_vmax_km_s is not None:
+                    vmax = arr[:, column_indices["Vmax"]]
+                    bad_vmax = valid & (
+                        ~np.isfinite(vmax) | (vmax <= 0.0)
+                    )
+                    if np.any(bad_vmax):
+                        row = start_row + int(np.flatnonzero(bad_vmax)[0])
+                        raise ValueError(
+                            "Invalid Vmax for otherwise-valid halo at "
+                            f"catalogue row {row}."
+                        )
+                    vmax_excluded = valid & (vmax > max_vmax_km_s)
+                    total_vmax_excluded += int(
+                        np.count_nonzero(vmax_excluded)
+                    )
+                    eligible = valid & ~vmax_excluded
+
+                mask_extended = eligible & (theta_s >= theta_min_deg)
+                mask_pointlike = eligible & (theta_s < theta_min_deg)
 
                 mask_extended_kept = mask_extended
                 mask_pointlike_kept = mask_pointlike
@@ -1480,6 +1625,7 @@ def prepare_subhalo_components(
             theta_cut_deg=theta_min_deg,
             n_pointlike=total_pointlike_kept,
             n_pointlike_total=total_pointlike,
+            max_vmax_km_s=max_vmax_km_s,
             cut_metadata=cut_metadata,
         )
     else:
@@ -1495,6 +1641,11 @@ def prepare_subhalo_components(
     print(f"Total halos seen: {total_seen:,}")
     print(f"Valid halos: {total_valid:,}")
     print(f"Invalid halos excluded: {total_invalid:,}")
+    if max_vmax_km_s is not None:
+        print(
+            f"Valid halos excluded by Vmax > {max_vmax_km_s:g} km/s: "
+            f"{total_vmax_excluded:,}"
+        )
     print(f"Extended halos: {total_extended:,}")
     print(f"Extended halos kept by cut: {total_extended_cut_kept:,}")
     print(f"Extended halos written: {total_extended_written:,}")
@@ -1529,11 +1680,15 @@ def main():
         scenario,
         TOP_N,
         nside=nside,
+        max_vmax_km_s=args.max_vmax_km_s,
+        clumpy_root=args.clumpy_root,
     )
     output_pointlike_fits = get_output_pointlike_fits(
         repop_id,
         scenario,
         nside,
+        max_vmax_km_s=args.max_vmax_km_s,
+        clumpy_root=args.clumpy_root,
     )
 
     if args.validate_pointlike_only:
@@ -1547,6 +1702,7 @@ def main():
             scenario=scenario,
             repop_id=repop_id,
             theta_cut_deg=theta_cut_deg,
+            max_vmax_km_s=args.max_vmax_km_s,
             check_cut_metadata=False,
         )
         if not valid:
@@ -1574,6 +1730,7 @@ def main():
         pointlike_cut_f=args.pointlike_cut_f,
         theta_aperture_deg=args.theta_aperture_deg,
         force_pointlike=args.force_pointlike,
+        max_vmax_km_s=args.max_vmax_km_s,
     )
 
 

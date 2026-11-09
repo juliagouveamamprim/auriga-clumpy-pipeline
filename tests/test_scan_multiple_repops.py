@@ -94,6 +94,15 @@ def test_aggregate_rows_computes_dispersion_and_worst_repop():
     )
     assert np.isclose(result[f"{theta_key}_max"], 0.008)
     assert result[f"{theta_key}_max_repop_id"] == 1
+    assert np.isclose(
+        result[f"{theta_key}_p16"],
+        np.percentile([0.006, 0.008], 16.0),
+    )
+    assert np.isclose(
+        result[f"{theta_key}_p84"],
+        np.percentile([0.006, 0.008], 84.0),
+    )
+    assert result[f"{theta_key}_n_above_1pct"] == 0
 
     js_key = "fraction_discarded_js_to_full"
     assert np.isclose(result[f"{js_key}_mean"], 0.20)
@@ -165,6 +174,43 @@ def test_validate_existing_csv(tmp_path):
             extended_f_values=[1e-3],
             envelope_modes=["theta-s"],
         )
+
+    with pytest.raises(ValueError, match="population selection"):
+        multi.validate_existing_csv(
+            path=path,
+            repop_id=0,
+            scenario="fragile",
+            nside=2048,
+            pointlike_f_values=[1e-3],
+            extended_f_values=[1e-3],
+            envelope_modes=["theta-s"],
+            max_vmax_km_s=8.0,
+        )
+
+
+def test_dark_scan_command_and_names_are_isolated(tmp_path):
+    args = type(
+        "Args",
+        (),
+        {
+            "nside": 2048,
+            "pointlike_f_values": "1e-3",
+            "extended_f_values": "1e-3",
+            "chunk_size": 123,
+            "max_vmax_km_s": 8.0,
+        },
+    )()
+    command = multi.build_scan_command(
+        args,
+        repop_id=0,
+        scenario="fragile",
+        input_h5=tmp_path / "input.h5",
+        output_csv=tmp_path / "output.csv",
+    )
+    assert command[-2:] == ["--max-vmax-km-s", "8.0"]
+    assert multi.individual_stem(
+        0, "fragile", 2048, ["theta-s"], 8.0
+    ).endswith("_dark_vmax_le_8kms")
 
 
 @pytest.mark.parametrize("j_pixel_ref", ["0.0", "nan"])

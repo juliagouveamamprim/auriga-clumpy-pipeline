@@ -31,7 +31,7 @@ For each discarded extended halo, its central-pixel proxy is repeated
 in every HEALPix pixel intersected by a disc of radius `theta_s`.
 Contributions from overlapping halos are summed pixel by pixel.
 
-The only pixel-level validation metric is
+The primary pixel-level validation metric is
 
     max(conservative discarded proxy map) / J_pixel_ref
 
@@ -45,6 +45,11 @@ When reading legacy CSVs without this ratio column, the aggregation and
 plotting scripts derive it in memory from `j_pixel_ref` and
 `max_discarded_combined_theta_s_envelope_pixel`. The input CSVs are not
 modified, and non-finite or non-positive reference values are rejected.
+
+The output also stores the separately normalized peak discarded pointlike
+map and extended `theta_s` envelope map. These component peaks are useful
+diagnostics, but their maxima can occur in different pixels and therefore
+must not be added to reconstruct the combined peak.
 
 The `theta-s` envelope is always applied. It is an intentionally extreme
 stress test: `theta_s` is a characteristic angular scale, not a physical
@@ -218,6 +223,101 @@ Example for scanning ten repopulations with
 
 Use `--aggregate-only` to regenerate the combined and summary CSV files
 without rerunning the individual scans.
+
+## Dark-only cut revalidation
+
+Both scan scripts accept an optional inclusive physical selection:
+
+    --max-vmax-km-s 8
+
+When enabled, each HDF5 chunk first receives the unchanged production
+validity mask, and otherwise-valid objects with `Vmax > 8 km/s` are removed.
+The remaining dark population is then classified as pointlike or extended.
+The first pass computes `J_pixel_ref` from that population only. The second
+pass constructs the uncut reference maps from every valid dark object and the
+discarded maps from the subset that fails the brightness cuts. Consequently,
+dark objects below a brightness threshold remain in the reference population
+but not in the cut population. Objects above the Vmax ceiling enter neither.
+
+The map methodology is unchanged. Pointlike objects contribute `Js` to their
+NESTED source pixel. Extended objects contribute the projected central-pixel
+proxy to their source pixel in the reference and cut representations. For the
+conservative impact metric, the central-pixel proxy of every discarded
+extended object is repeated in all NESTED pixels intersecting its `theta_s`
+disc. Overlapping pointlike and extended discarded contributions are summed,
+and the maximum accumulated pixel is divided by the same dark-only
+`J_pixel_ref`.
+
+Dark outputs carry `population_selection=dark_vmax_le_8kms` and
+`max_vmax_km_s=8`. Default result and log directories gain a
+`dark_vmax_le_8kms/` subdirectory, and individual filenames contain the same
+tag. Existing full-population defaults and legacy CSV reuse remain unchanged.
+The summary CSV records mean, sample standard deviation, median, minimum,
+maximum, 16th, 84th, and 95th percentiles for pixel-impact ratios, together
+with the count strictly above 1% and the repopulation producing the maximum.
+
+The repository retains the 50-repopulation plot but not its source combined
+CSV or exact launch command. The multi-repopulation driver selects consecutive
+IDs, and the documented validation convention starts at zero; the directly
+comparable sample is therefore `repop_0000` through `repop_0049`. This should
+be confirmed against any external archived job record before the 50-catalogue
+run.
+
+### Lattes pilot: one repopulation per scenario
+
+Run this first and review both individual CSVs, the combined CSV, and summary:
+
+```bash
+python -u diagnostics/cuts/scripts/scan_multiple_repops.py \
+    --repop-start 0 \
+    --n-repops 1 \
+    --scenarios fragile,resilient \
+    --input-root /dados5/julia/Auriga_outputs_hdf5_v2 \
+    --nside 2048 \
+    --pointlike-f-values 1e-3 \
+    --extended-f-values 1e-3 \
+    --max-vmax-km-s 8 \
+    --chunk-size 500000 \
+    --results-dir /dados5/julia/Auriga_dark_cut_validation/pilot_repop_0000/results \
+    --logs-dir /dados5/julia/Auriga_dark_cut_validation/pilot_repop_0000/logs
+```
+
+### Lattes 50-repopulation run after pilot approval
+
+```bash
+python -u diagnostics/cuts/scripts/scan_multiple_repops.py \
+    --repop-start 0 \
+    --n-repops 50 \
+    --scenarios fragile,resilient \
+    --input-root /dados5/julia/Auriga_outputs_hdf5_v2 \
+    --nside 2048 \
+    --pointlike-f-values 1e-3 \
+    --extended-f-values 1e-3 \
+    --max-vmax-km-s 8 \
+    --chunk-size 500000 \
+    --results-dir /dados5/julia/Auriga_dark_cut_validation/all_50_repops/results \
+    --logs-dir /dados5/julia/Auriga_dark_cut_validation/all_50_repops/logs
+```
+
+These commands do not invoke CLUMPY. The driver refuses to reuse an
+individual CSV whose population tag or Vmax ceiling differs. Do not add
+`--overwrite` when preserving an existing diagnostic run is required.
+
+### Methodological limitations retained intentionally
+
+- At NSIDE 2048, every float64 map contains 50,331,648 pixels. With one
+  pointlike and one extended fraction, the unchanged implementation estimates
+  roughly 2.25 GiB of persistent map arrays at peak, in addition to temporary
+  arrays and catalogue chunks. Lattes jobs need appropriate memory headroom.
+- The extended `theta_s` envelope is deliberately conservative: `theta_s` is
+  a characteristic scale, not a truncation boundary, and a constant
+  central-pixel proxy is repeated over the footprint. It is not a physical
+  rendered extended-halo map.
+- The metric is a maximum accumulated discarded-proxy pixel divided by
+  `J_pixel_ref`. Catalogue-integrated `Js` fractions remain secondary
+  bookkeeping and are not substitutes for this map-level test.
+- Separate pointlike and extended peaks need not be co-located. The combined
+  accumulated map, rather than the sum of separate maxima, is authoritative.
 
 ## Multiple-repopulation plots
 

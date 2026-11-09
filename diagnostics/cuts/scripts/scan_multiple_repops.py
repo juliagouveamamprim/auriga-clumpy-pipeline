@@ -39,6 +39,8 @@ DEFAULT_LOGS_DIR = (
 VALID_SCENARIOS = {"fragile", "resilient"}
 
 BASE_AGGREGATE_METRICS = [
+    "n_physical_valid_total",
+    "n_vmax_excluded",
     "n_valid_total",
     "n_pointlike_total",
     "n_pointlike_kept",
@@ -165,6 +167,16 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--max-vmax-km-s",
+        type=float,
+        default=None,
+        help=(
+            "Optional inclusive Vmax ceiling passed to every individual "
+            "scan. Unset preserves full-population validation."
+        ),
+    )
+
+    parser.add_argument(
         "--results-dir",
         type=Path,
         default=DEFAULT_RESULTS_DIR,
@@ -221,17 +233,35 @@ def parse_args():
     return parser.parse_args()
 
 
-def individual_stem(repop_id, scenario, nside, envelope_modes):
+def selection_tag(max_vmax_km_s):
+    if max_vmax_km_s is None:
+        return "full"
+    value = float(max_vmax_km_s)
+    if not np.isfinite(value) or value <= 0.0:
+        raise ValueError("max-vmax-km-s must be finite and positive.")
+    text = np.format_float_positional(value, trim="-").replace(".", "p")
+    return f"dark_vmax_le_{text}kms"
+
+
+def individual_stem(
+    repop_id,
+    scenario,
+    nside,
+    envelope_modes,
+    max_vmax_km_s=None,
+):
     suffix = (
         "envelopes_scan"
         if envelope_modes
         else "central_pixel_scan"
     )
 
-    return (
+    stem = (
         f"repop_{repop_id:04d}_{scenario}"
         f"_nside{nside}_{suffix}"
     )
+    tag = selection_tag(max_vmax_km_s)
+    return stem if tag == "full" else f"{stem}_{tag}"
 
 
 def build_input_h5(input_root, repop_id, scenario):
@@ -288,6 +318,7 @@ def validate_existing_csv(
     pointlike_f_values,
     extended_f_values,
     envelope_modes,
+    max_vmax_km_s=None,
 ):
     rows = read_csv_rows(path)
 
@@ -357,6 +388,39 @@ def validate_existing_csv(
         if envelope_modes
         else "none"
     )
+
+    expected_selection = selection_tag(max_vmax_km_s)
+
+    for row in rows:
+        observed_selection = row.get("population_selection", "full")
+        if observed_selection != expected_selection:
+            raise ValueError(
+                "Existing CSV has incompatible population selection: "
+                f"{path} -> {observed_selection!r}, expected "
+                f"{expected_selection!r}"
+            )
+        observed_vmax = row.get("max_vmax_km_s", "")
+        if max_vmax_km_s is None:
+            if observed_vmax not in ("", None):
+                raise ValueError(
+                    f"Existing CSV has unexpected Vmax ceiling: {path}"
+                )
+        else:
+            try:
+                matches_vmax = np.isclose(
+                    float(observed_vmax),
+                    float(max_vmax_km_s),
+                    rtol=0.0,
+                    atol=0.0,
+                )
+            except (TypeError, ValueError):
+                matches_vmax = False
+            if not matches_vmax:
+                raise ValueError(
+                    f"Existing CSV has incompatible Vmax ceiling: {path}"
+                )
+        row.setdefault("population_selection", expected_selection)
+        row.setdefault("max_vmax_km_s", "")
 
     checks = {
         "repop_id": str(repop_id),
@@ -443,6 +507,11 @@ def build_scan_command(
             ["--chunk-size", str(args.chunk_size)]
         )
 
+    if getattr(args, "max_vmax_km_s", None) is not None:
+        command.extend(
+            ["--max-vmax-km-s", str(args.max_vmax_km_s)]
+        )
+
     return command
 
 
@@ -514,6 +583,8 @@ def aggregate_rows(rows):
     grouped = defaultdict(list)
 
     for row in rows:
+        population_selection = row.get("population_selection", "full")
+        max_vmax_text = row.get("max_vmax_km_s", "")
         key = (
             row["scenario"],
             int(row["nside"]),
@@ -521,6 +592,8 @@ def aggregate_rows(rows):
             float(row["extended_f"]),
             float(row["theta_aperture_deg"]),
             row["extended_envelope_modes"],
+            population_selection,
+            "" if max_vmax_text in ("", None) else float(max_vmax_text),
         )
         grouped[key].append(row)
 
@@ -553,6 +626,8 @@ def aggregate_rows(rows):
             extended_f,
             theta_aperture_deg,
             envelope_modes,
+            population_selection,
+            max_vmax_km_s,
         ) = key
 
         repop_ids = sorted(
@@ -569,6 +644,8 @@ def aggregate_rows(rows):
             "extended_f": extended_f,
             "theta_aperture_deg": theta_aperture_deg,
             "extended_envelope_modes": envelope_modes,
+            "population_selection": population_selection,
+            "max_vmax_km_s": max_vmax_km_s,
             "n_repops": len(repop_ids),
             "repop_id_min": min(repop_ids),
             "repop_id_max": max(repop_ids),
@@ -614,6 +691,20 @@ def aggregate_rows(rows):
                 np.max(values)
             )
 
+            if metric in ratio_metrics:
+                summary[f"{metric}_p16"] = float(
+                    np.percentile(values, 16.0)
+                )
+                summary[f"{metric}_p84"] = float(
+                    np.percentile(values, 84.0)
+                )
+                summary[f"{metric}_p95"] = float(
+                    np.percentile(values, 95.0)
+                )
+                summary[f"{metric}_n_above_1pct"] = int(
+                    np.count_nonzero(values > 0.01)
+                )
+
             if metric in worst_case_metrics:
                 maximum = max(
                     values_and_repops,
@@ -639,7 +730,8 @@ def print_summary(summary_rows):
             f"{row['scenario']:9s} | "
             f"f_pl={float(row['pointlike_f']):.1e} "
             f"f_ext={float(row['extended_f']):.1e} | "
-            f"N={row['n_repops']}"
+            f"N={row['n_repops']} | "
+            f"population={row.get('population_selection', 'full')}"
         )
 
         ratio_columns = sorted(
@@ -658,6 +750,10 @@ def print_summary(summary_rows):
                 f"std={100.0 * float(row[metric + '_std']):.4f}% "
                 f"min={100.0 * float(row[metric + '_min']):.4f}% "
                 f"max={100.0 * float(row[metric + '_max']):.4f}% "
+                f"p16={100.0 * float(row[metric + '_p16']):.4f}% "
+                f"p84={100.0 * float(row[metric + '_p84']):.4f}% "
+                f"p95={100.0 * float(row[metric + '_p95']):.4f}% "
+                f">1%={int(row[metric + '_n_above_1pct'])} "
                 f"(repop "
                 f"{int(row[metric + '_max_repop_id']):04d})"
             )
@@ -702,6 +798,9 @@ def print_summary(summary_rows):
 def main():
     args = parse_args()
 
+    max_vmax_km_s = getattr(args, "max_vmax_km_s", None)
+    population_selection = selection_tag(max_vmax_km_s)
+
     if args.theta_aperture_deg is not None:
         raise ValueError(
             "--theta-aperture-deg is deprecated. The aperture is now "
@@ -736,10 +835,18 @@ def main():
 
     scenario_tag = "-".join(scenarios)
 
+    if max_vmax_km_s is not None:
+        if args.results_dir == DEFAULT_RESULTS_DIR:
+            args.results_dir = args.results_dir / population_selection
+        if args.logs_dir == DEFAULT_LOGS_DIR:
+            args.logs_dir = args.logs_dir / population_selection
+
     prefix = (
         f"repops_{args.repop_start:04d}_{repop_end:04d}_"
         f"{scenario_tag}_nside{args.nside}"
     )
+    if max_vmax_km_s is not None:
+        prefix += f"_{population_selection}"
 
     combined_csv = (
         args.combined_csv
@@ -763,6 +870,7 @@ def main():
                 scenario,
                 args.nside,
                 envelope_modes,
+                max_vmax_km_s,
             )
 
             output_csv = (
@@ -814,6 +922,7 @@ def main():
                         pointlike_f_values,
                         extended_f_values,
                         envelope_modes,
+                        max_vmax_km_s,
                     )
                 elif args.aggregate_only:
                     message = (
@@ -848,6 +957,7 @@ def main():
                         pointlike_f_values,
                         extended_f_values,
                         envelope_modes,
+                        max_vmax_km_s,
                     )
 
                 collected_rows.extend(

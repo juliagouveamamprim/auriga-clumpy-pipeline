@@ -24,7 +24,6 @@ scenario="$2"
 all_args=("$@")
 printf -v repop_tag 'repop_%04d' "$repop_id"
 nside="${NSIDE}"
-case_dir="${FAKE_REPO_ROOT}/outputs/clumpy/${scenario}"
 
 option_value() {
     local option="$1"
@@ -48,6 +47,12 @@ has_option() {
     done
     return 1
 }
+
+clumpy_root="$(option_value --clumpy-root || true)"
+if [ -z "$clumpy_root" ]; then
+    clumpy_root="${FAKE_REPO_ROOT}/outputs/clumpy"
+fi
+case_dir="${clumpy_root}/${scenario}"
 
 case "$script_name" in
     prepare_subhalo_components.py)
@@ -258,8 +263,11 @@ def assert_two_clumpy_stages(result, call_log, expected_data):
     assert corrected[3].endswith("repop_0007_corrected_params_nside8.txt")
 
 
-def case_paths(repository):
-    case_dir = repository / "outputs" / "clumpy" / "resilient"
+def case_paths(repository, population_tag=None):
+    run_root = repository / "outputs" / "clumpy"
+    if population_tag is not None:
+        run_root /= population_tag
+    case_dir = run_root / "resilient"
     repop_dir = "repop_0007_nside8"
     basename = "annihil_gal2D_LOS0_0_FOV360x180_nside8"
 
@@ -387,6 +395,34 @@ def test_default_run_preserves_primary_raw_fits(tmp_path):
     assert paths["raw_fits"].read_text() == "fake raw fits\n"
     assert paths["raw_log"].is_file()
     assert paths["total_fits"].is_file()
+
+
+def test_dark_selection_uses_isolated_paths_and_forwards_threshold(tmp_path):
+    repository, fake_python, call_log = make_test_repository(tmp_path)
+    executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
+
+    result = run_wrapper(
+        repository,
+        fake_python,
+        call_log,
+        executable,
+        MAX_SUBHALO_VMAX_KM_S="8",
+        EXTENDED_CUT_F="1e-3",
+        POINTLIKE_CUT_F="1e-3",
+    )
+    dark_paths = case_paths(repository, "dark_vmax_le_8kms")
+    full_paths = case_paths(repository)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert dark_paths["raw_list"].is_file()
+    assert dark_paths["pointlike_fits"].is_file()
+    assert dark_paths["corrected_list"].is_file()
+    assert dark_paths["total_fits"].is_file()
+    assert not full_paths["raw_list"].exists()
+    assert not full_paths["pointlike_fits"].exists()
+    arguments = call_log.with_suffix(".python-args.tsv").read_text()
+    assert "--max-vmax-km-s 8" in arguments
+    assert str(repository / "outputs/clumpy/dark_vmax_le_8kms") in arguments
 
 
 def test_cleanup_removes_only_primary_raw_fits_after_success(tmp_path):

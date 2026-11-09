@@ -29,6 +29,7 @@ Environment variables:
   EXTENDED_CUT_F        Extended cut factor inherited by one-case runs (default: none)
   POINTLIKE_CUT_F       Pointlike cut factor inherited by one-case runs (default: none)
   FORCE_POINTLIKE       Regenerate valid pointlike FITS files (0 or 1; default: 0)
+  MAX_SUBHALO_VMAX_KM_S Inclusive Vmax ceiling in km/s (default: unset/full population)
   CLUMPY_EXECUTABLE     CLUMPY executable or wrapper inherited by one-case runs
   PYTHON_EXECUTABLE     Python executable inherited by one-case runs
   CATALOG_ROOT          Root containing repop_XXXX HDF5 catalogues
@@ -101,9 +102,10 @@ NSIDE="${NSIDE:-${DEFAULT_NSIDE}}"
 EXTENDED_CUT_F="${EXTENDED_CUT_F:-}"
 POINTLIKE_CUT_F="${POINTLIKE_CUT_F:-}"
 FORCE_POINTLIKE="${FORCE_POINTLIKE:-0}"
+MAX_SUBHALO_VMAX_KM_S="${MAX_SUBHALO_VMAX_KM_S:-}"
 CATALOG_ROOT="${CATALOG_ROOT:-}"
 
-export NSIDE EXTENDED_CUT_F POINTLIKE_CUT_F FORCE_POINTLIKE
+export NSIDE EXTENDED_CUT_F POINTLIKE_CUT_F FORCE_POINTLIKE MAX_SUBHALO_VMAX_KM_S
 
 for value_name in START_ID END_ID MAX_JOBS POLL_SECONDS LAUNCH_DELAY_SECONDS; do
     value="${!value_name}"
@@ -131,6 +133,19 @@ fi
 if [[ "${FORCE_POINTLIKE}" != "0" && "${FORCE_POINTLIKE}" != "1" ]]; then
     echo "ERROR: FORCE_POINTLIKE must be 0 or 1." >&2
     exit 2
+fi
+
+if [[ -n "${MAX_SUBHALO_VMAX_KM_S}" ]]; then
+    if ! [[ "${MAX_SUBHALO_VMAX_KM_S}" =~ ^[0-9]+([.][0-9]+)?$ ]] \
+        || [[ "${MAX_SUBHALO_VMAX_KM_S}" =~ ^0+([.]0+)?$ ]]; then
+        echo "ERROR: MAX_SUBHALO_VMAX_KM_S must be a positive decimal number." >&2
+        exit 2
+    fi
+    VMAX_PATH_VALUE=$(printf "%s" "${MAX_SUBHALO_VMAX_KM_S}" \
+        | sed -E 's/^0+([0-9])/\1/; s/0+$//; s/[.]$//; s/[.]/p/')
+    POPULATION_TAG="dark_vmax_le_${VMAX_PATH_VALUE}kms"
+else
+    POPULATION_TAG="full"
 fi
 
 case "${SCENARIO_MODE}" in
@@ -164,7 +179,12 @@ printf -v START_TAG "%04d" "${START_ID}"
 printf -v END_TAG "%04d" "${END_ID}"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 
-BATCH_LOG_DIR="${REPO_ROOT}/outputs/clumpy/logs/batches/${SCENARIO_MODE}_${START_TAG}_${END_TAG}_${TIMESTAMP}"
+if [[ "${POPULATION_TAG}" == "full" ]]; then
+    POPULATION_RUN_ROOT="${REPO_ROOT}/outputs/clumpy"
+else
+    POPULATION_RUN_ROOT="${REPO_ROOT}/outputs/clumpy/${POPULATION_TAG}"
+fi
+BATCH_LOG_DIR="${POPULATION_RUN_ROOT}/logs/batches/${SCENARIO_MODE}_${START_TAG}_${END_TAG}_${TIMESTAMP}"
 mkdir -p "${BATCH_LOG_DIR}"
 
 echo "================================================================================"
@@ -183,10 +203,13 @@ echo "Discard stale:    ${DISCARD_STALE_DOWNSTREAM}"
 echo "Cleanup raw FITS: ${CLEANUP_RAW_FITS}"
 echo "Catalogue root:   ${CATALOG_ROOT}"
 echo "NSIDE:            ${NSIDE}"
+echo "Population:       ${POPULATION_TAG}"
+echo "Population root:  ${POPULATION_RUN_ROOT}"
 echo "Cuts:"
 echo "  EXTENDED_CUT_F:      ${EXTENDED_CUT_F:-none}"
 echo "  POINTLIKE_CUT_F:     ${POINTLIKE_CUT_F:-none}"
 echo "  FORCE_POINTLIKE:     ${FORCE_POINTLIKE}"
+echo "  MAX_SUBHALO_VMAX_KM_S: ${MAX_SUBHALO_VMAX_KM_S:-none (full population)}"
 echo "  Extended aperture:   hp.max_pixrad(NSIDE), derived automatically"
 echo "One-case script:  ${ONE_CASE_SCRIPT}"
 echo "Batch log dir:    ${BATCH_LOG_DIR}"
@@ -298,7 +321,7 @@ for repop_id in $(seq "${START_ID}" "${END_ID}"); do
     printf -v repop_tag "repop_%04d" "${repop_id}"
 
     for scenario in "${SCENARIOS[@]}"; do
-        final_fits="${REPO_ROOT}/outputs/clumpy/${scenario}/outputs/total/${repop_tag}_nside${NSIDE}/auriga_total_nside${NSIDE}.fits"
+        final_fits="${POPULATION_RUN_ROOT}/${scenario}/outputs/total/${repop_tag}_nside${NSIDE}/auriga_total_nside${NSIDE}.fits"
 
         if [[ "${FROM_CORRECTION}" == "0" \
             && "${SKIP_COMPLETED}" == "1" \
