@@ -13,6 +13,7 @@ VALID_SCENARIOS = ("fragile", "resilient")
 LOG_REL_MIN = -16.0
 LOG_REL_MAX = 0.0
 N_BINS_REL = 320
+DATASET_PATH = "iteration_0/data"
 
 
 def parse_scenarios(text):
@@ -83,6 +84,15 @@ def parse_args():
         default=1_000_000,
         help="Number of HDF5 rows read per chunk.",
     )
+    parser.add_argument(
+        "--max-vmax-km-s",
+        type=float,
+        default=None,
+        help=(
+            "Optional inclusive Vmax upper limit in km/s. When omitted, "
+            "use the full catalogue population."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -101,6 +111,11 @@ def validate_args(args):
         raise ValueError("--n-repops must be positive.")
     if args.chunk_size <= 0:
         raise ValueError("--chunk-size must be positive.")
+    if args.max_vmax_km_s is not None and (
+        not np.isfinite(args.max_vmax_km_s)
+        or args.max_vmax_km_s <= 0.0
+    ):
+        raise ValueError("--max-vmax-km-s must be finite and positive.")
     if args.output_npz.suffix != ".npz":
         raise ValueError("--output-npz must end in .npz.")
 
@@ -123,22 +138,78 @@ def validate_inputs(input_root, repop_ids, scenarios):
         )
 
 
-def find_max_logj(path, chunk_size):
+def vmax_column_index(dataset, path):
+    if "column_names" not in dataset.attrs:
+        raise KeyError(f"Dataset {DATASET_PATH!r} has no column_names in {path}")
+
+    column_names = [
+        name.decode("utf-8") if isinstance(name, bytes) else str(name)
+        for name in dataset.attrs["column_names"]
+    ]
+    if len(column_names) != dataset.shape[1]:
+        raise ValueError(f"column_names length mismatch in {path}")
+    if "Vmax" not in column_names:
+        raise KeyError(f"Missing Vmax column in {path}")
+
+    return column_names.index("Vmax")
+
+
+def selected_js_chunk(dataset, start, stop, vmax_index, max_vmax_km_s):
+    js = np.asarray(dataset[start:stop, 0], dtype=np.float64)
+    valid_js = np.isfinite(js) & (js > 0.0)
+
+    if max_vmax_km_s is None:
+        return js[valid_js], valid_js, None
+
+    vmax = np.asarray(
+        dataset[start:stop, vmax_index],
+        dtype=np.float64,
+    )
+    selected = (
+        valid_js
+        & np.isfinite(vmax)
+        & (vmax <= max_vmax_km_s)
+    )
+    return js[selected], valid_js, vmax
+
+
+def find_max_logj(path, chunk_size, max_vmax_km_s=None):
     n_total = 0
     n_bad = 0
+    n_bad_vmax = 0
+    n_above_vmax = 0
     max_logj = -np.inf
 
     with h5py.File(path, "r") as handle:
-        dataset = handle["iteration_0/data"]
+        dataset = handle[DATASET_PATH]
         n_rows = dataset.shape[0]
+        vmax_index = (
+            None
+            if max_vmax_km_s is None
+            else vmax_column_index(dataset, path)
+        )
 
         for start in range(0, n_rows, chunk_size):
             stop = min(start + chunk_size, n_rows)
-            js = dataset[start:stop, 0]
-
-            good = np.isfinite(js) & (js > 0.0)
-            n_bad += int(np.count_nonzero(~good))
-            js = js[good]
+            js, valid_js, vmax = selected_js_chunk(
+                dataset,
+                start,
+                stop,
+                vmax_index,
+                max_vmax_km_s,
+            )
+            n_bad += int(np.count_nonzero(~valid_js))
+            if vmax is not None:
+                n_bad_vmax += int(
+                    np.count_nonzero(valid_js & ~np.isfinite(vmax))
+                )
+                n_above_vmax += int(
+                    np.count_nonzero(
+                        valid_js
+                        & np.isfinite(vmax)
+                        & (vmax > max_vmax_km_s)
+                    )
+                )
 
             if js.size == 0:
                 continue
@@ -148,26 +219,51 @@ def find_max_logj(path, chunk_size):
             n_total += int(logj.size)
 
     if not np.isfinite(max_logj):
-        raise RuntimeError(f"No valid Js values found in {path}")
+        population = (
+            "the full population"
+            if max_vmax_km_s is None
+            else f"Vmax <= {max_vmax_km_s:g} km/s"
+        )
+        raise RuntimeError(f"No valid Js values found for {population} in {path}")
 
-    return max_logj, n_total, n_bad
+    return max_logj, n_total, n_bad, n_bad_vmax, n_above_vmax
 
 
-def process_catalogue(path, chunk_size, relative_edges):
-    max_logj, n_total, n_bad = find_max_logj(path, chunk_size)
+def process_catalogue(
+    path,
+    chunk_size,
+    relative_edges,
+    max_vmax_km_s=None,
+):
+    (
+        max_logj,
+        n_total,
+        n_bad,
+        n_bad_vmax,
+        n_above_vmax,
+    ) = find_max_logj(path, chunk_size, max_vmax_km_s)
     histogram = np.zeros(len(relative_edges) - 1, dtype=np.int64)
     n_under = 0
     n_over = 0
 
     with h5py.File(path, "r") as handle:
-        dataset = handle["iteration_0/data"]
+        dataset = handle[DATASET_PATH]
         n_rows = dataset.shape[0]
+        vmax_index = (
+            None
+            if max_vmax_km_s is None
+            else vmax_column_index(dataset, path)
+        )
 
         for start in range(0, n_rows, chunk_size):
             stop = min(start + chunk_size, n_rows)
-            js = dataset[start:stop, 0]
-            good = np.isfinite(js) & (js > 0.0)
-            js = js[good]
+            js, _, _ = selected_js_chunk(
+                dataset,
+                start,
+                stop,
+                vmax_index,
+                max_vmax_km_s,
+            )
 
             if js.size == 0:
                 continue
@@ -206,6 +302,8 @@ def process_catalogue(path, chunk_size, relative_edges):
         "n_total": n_total,
         "max_log10_js": max_logj,
         "n_bad": n_bad,
+        "n_bad_vmax": n_bad_vmax,
+        "n_above_vmax": n_above_vmax,
         "n_under": n_under,
         "n_over": n_over,
     }
@@ -236,6 +334,11 @@ def main():
         "repop_start": np.asarray(args.repop_start),
         "n_repops": np.asarray(args.n_repops),
         "chunk_size": np.asarray(args.chunk_size),
+        "max_vmax_km_s": np.asarray(
+            np.nan
+            if args.max_vmax_km_s is None
+            else args.max_vmax_km_s
+        ),
     }
 
     for scenario in args.scenarios:
@@ -244,6 +347,8 @@ def main():
         n_total = []
         max_log10_js = []
         n_bad = []
+        n_bad_vmax = []
+        n_above_vmax = []
         n_under = []
         n_over = []
 
@@ -258,11 +363,14 @@ def main():
                 path,
                 args.chunk_size,
                 relative_edges,
+                args.max_vmax_km_s,
             )
             cdfs.append(result["cdf"])
             n_total.append(result["n_total"])
             max_log10_js.append(result["max_log10_js"])
             n_bad.append(result["n_bad"])
+            n_bad_vmax.append(result["n_bad_vmax"])
+            n_above_vmax.append(result["n_above_vmax"])
             n_under.append(result["n_under"])
             n_over.append(result["n_over"])
 
@@ -275,6 +383,14 @@ def main():
             dtype=np.float64,
         )
         output[prefix + "n_bad"] = np.asarray(n_bad, dtype=np.int64)
+        output[prefix + "n_bad_vmax"] = np.asarray(
+            n_bad_vmax,
+            dtype=np.int64,
+        )
+        output[prefix + "n_above_vmax"] = np.asarray(
+            n_above_vmax,
+            dtype=np.int64,
+        )
         output[prefix + "n_under"] = np.asarray(n_under, dtype=np.int64)
         output[prefix + "n_over"] = np.asarray(n_over, dtype=np.int64)
 

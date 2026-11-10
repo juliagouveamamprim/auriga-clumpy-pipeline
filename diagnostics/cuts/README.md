@@ -83,7 +83,8 @@ where `Js,max` is evaluated independently for each repopulation. The
 catalogues are read in chunks and are never concatenated in memory.
 The saved NPZ contains one CDF per catalogue together with the
 repopulation IDs, catalogue sizes, maximum `log10(Js)`, and invalid or
-out-of-range counts.
+out-of-range counts. The `max_vmax_km_s` field records the applied selection;
+it is `NaN` for the unfiltered full-population scan.
 
 This is a descriptive population diagnostic. It motivates the need for
 catalogue reduction but does not select or validate a particular value
@@ -106,6 +107,24 @@ the median CDF reaches 99%. The 50%, 90%,
 and 99% thresholds are also printed to the terminal.
 
 Example:
+
+    python diagnostics/cuts/scripts/plot_relative_js_cumulative.py \
+        --input-npz outputs/diagnostics/cuts/relative_js_cumulative/relative_js_cumulative_0500repops.npz \
+        --output-dir diagnostics/cuts/plots \
+        --formats png,pdf
+
+For the dark-only Figure 7 population, select the inclusive
+`Vmax <= 8 km/s` sample while scanning. The catalogue-wise `Js,max` and CDF
+normalization are then evaluated after this selection. These commands replace
+the original Figure 7 cache and figures in place:
+
+    python -u diagnostics/cuts/scripts/scan_relative_js_cumulative.py \
+        --input-root /dados5/julia/Auriga_outputs_hdf5_v2 \
+        --repop-start 0 \
+        --n-repops 500 \
+        --scenarios fragile,resilient \
+        --max-vmax-km-s 8 \
+        --output-npz outputs/diagnostics/cuts/relative_js_cumulative/relative_js_cumulative_0500repops.npz
 
     python diagnostics/cuts/scripts/plot_relative_js_cumulative.py \
         --input-npz outputs/diagnostics/cuts/relative_js_cumulative/relative_js_cumulative_0500repops.npz \
