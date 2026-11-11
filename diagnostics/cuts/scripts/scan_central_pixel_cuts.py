@@ -98,6 +98,17 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--max-vmax-km-s",
+        type=float,
+        default=None,
+        help=(
+            "Optional inclusive Vmax ceiling in km/s, applied after the "
+            "existing validity mask and before J_ref. Unset preserves the "
+            "original full-population diagnostic."
+        ),
+    )
+
+    parser.add_argument(
         "--output-csv",
         type=Path,
         default=None,
@@ -197,8 +208,35 @@ def reduction_factor(total, kept):
     return total / kept
 
 
+def selection_tag(max_vmax_km_s):
+    if max_vmax_km_s is None:
+        return "full"
+    value = float(max_vmax_km_s)
+    if not np.isfinite(value) or value <= 0.0:
+        raise ValueError("max-vmax-km-s must be finite and positive.")
+    text = np.format_float_positional(value, trim="-").replace(".", "p")
+    return f"dark_vmax_le_{text}kms"
+
+
+def apply_vmax_selection(valid, vmax, max_vmax_km_s, row_offset=0):
+    """Apply the optional physical selection to an existing validity mask."""
+    if max_vmax_km_s is None:
+        return valid, 0
+    bad_vmax = valid & (~np.isfinite(vmax) | (vmax <= 0.0))
+    if np.any(bad_vmax):
+        row = row_offset + int(np.flatnonzero(bad_vmax)[0])
+        raise ValueError(
+            f"Invalid Vmax for otherwise-valid halo at catalogue row {row}."
+        )
+    excluded = valid & (vmax > max_vmax_km_s)
+    return valid & ~excluded, int(np.count_nonzero(excluded))
+
+
 def main():
     args = parse_args()
+
+    max_vmax_km_s = getattr(args, "max_vmax_km_s", None)
+    population_selection = selection_tag(max_vmax_km_s)
 
     if args.repop_id < 0:
         raise ValueError("repop_id must be non-negative.")
@@ -245,11 +283,17 @@ def main():
     output_csv = args.output_csv
 
     if output_csv is None:
+        selection_directory = (
+            Path()
+            if max_vmax_km_s is None
+            else Path(population_selection)
+        )
         output_csv = (
             REPOSITORY_ROOT
             / "diagnostics"
             / "cuts"
             / "results_summary"
+            / selection_directory
             / (
                 f"repop_{args.repop_id:04d}_{args.scenario}"
                 f"_nside{args.nside}_central_pixel_scan.csv"
@@ -295,6 +339,15 @@ def main():
     )
     print(f"Pointlike f values: {pointlike_f_values}")
     print(f"Extended f values: {extended_f_values}")
+    print(f"Population selection: {population_selection}")
+    print(
+        "Maximum Vmax: "
+        + (
+            "disabled (full population)"
+            if max_vmax_km_s is None
+            else f"{max_vmax_km_s:g} km/s (inclusive)"
+        )
+    )
     print(
         "Extended envelope modes: "
         + (
@@ -347,6 +400,9 @@ def main():
             "Zearth",
         ]
 
+        if max_vmax_km_s is not None:
+            required_columns.append("Vmax")
+
         missing_columns = [
             name for name in required_columns
             if name not in column_names
@@ -377,6 +433,7 @@ def main():
             theta_min_deg=theta_min_deg,
             nside=args.nside,
             chunk_size=args.chunk_size,
+            max_vmax_km_s=max_vmax_km_s,
             progress_label="Reference scan",
         )
 
@@ -421,6 +478,8 @@ def main():
             for mode in extended_envelope_modes
         }
 
+        n_physical_valid_total = 0
+        n_vmax_excluded = 0
         n_valid_total = 0
         n_pointlike_total = 0
         n_extended_total = 0
@@ -474,6 +533,17 @@ def main():
                 y_e=y_e,
                 z_e=z_e,
             )
+
+            n_physical_valid_total += int(np.count_nonzero(valid))
+            if max_vmax_km_s is not None:
+                vmax = arr[:, column_indices["Vmax"]]
+                valid, n_excluded_chunk = apply_vmax_selection(
+                    valid,
+                    vmax,
+                    max_vmax_km_s,
+                    row_offset=start_row,
+                )
+                n_vmax_excluded += n_excluded_chunk
 
             mask_pointlike = valid & (theta_s < theta_min_deg)
             mask_extended = valid & (theta_s >= theta_min_deg)
@@ -709,6 +779,10 @@ def main():
                             "ratio_max_discarded_"
                             f"{mode_key}_envelope_to_j_pixel_ref"
                         ): envelope_ratio,
+                        (
+                            "ratio_max_discarded_extended_"
+                            f"{mode_key}_envelope_to_j_pixel_ref"
+                        ): float(extended_envelope.max()) / j_pixel_ref,
                     }
                 )
 
@@ -732,6 +806,10 @@ def main():
                 "scenario": args.scenario,
                 "repop_id": args.repop_id,
                 "input_h5": str(input_h5),
+                "population_selection": population_selection,
+                "max_vmax_km_s": (
+                    "" if max_vmax_km_s is None else max_vmax_km_s
+                ),
                 "nside": args.nside,
                 "npix": npix,
                 "theta_pix_deg": theta_pix_deg,
@@ -753,6 +831,8 @@ def main():
                 "extended_f": extended_f,
                 "pointlike_j_cut": pointlike_cuts[pointlike_f],
                 "extended_j_cut": extended_cuts[extended_f],
+                "n_physical_valid_total": n_physical_valid_total,
+                "n_vmax_excluded": n_vmax_excluded,
                 "n_valid_total": n_valid_total,
                 "n_pointlike_total": n_pointlike_total,
                 "n_pointlike_kept": n_pointlike_kept,
@@ -784,6 +864,9 @@ def main():
                 ),
                 "max_discarded_pointlike_pixel": float(
                     pointlike_discarded.max()
+                ),
+                "ratio_max_discarded_pointlike_to_j_pixel_ref": (
+                    float(pointlike_discarded.max()) / j_pixel_ref
                 ),
                 "max_final_combined_pixel": max_final,
                 "pixel_max_final_combined": pixel_max_final,

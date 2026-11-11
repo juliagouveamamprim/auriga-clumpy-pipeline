@@ -930,6 +930,69 @@ def test_batch_from_correction_does_not_skip_existing_total(tmp_path):
     assert "Skipped:    0" in result.stdout
 
 
+def test_batch_both_scenarios_zero_to_nine_supports_twenty_jobs(tmp_path):
+    repository = tmp_path / "auriga-pipeline"
+    scripts = repository / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(SOURCE_BATCH_WRAPPER, scripts / SOURCE_BATCH_WRAPPER.name)
+    invocation_log = tmp_path / "one-case-invocations.txt"
+    write_executable(
+        scripts / SOURCE_WRAPPER.name,
+        "#!/usr/bin/env bash\n"
+        "printf '%s\\n' \"$*\" >> \"$BATCH_ONE_CASE_LOG\"\n",
+    )
+
+    catalog_root = tmp_path / "catalogues"
+    for repop_id in range(10):
+        repop_dir = catalog_root / f"repop_{repop_id:04d}"
+        repop_dir.mkdir(parents=True)
+        for scenario in ("fragile", "resilient"):
+            (repop_dir / f"fullrepop_hydro_{scenario}.h5").write_text(
+                "catalogue\n",
+                encoding="utf-8",
+            )
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "BATCH_ONE_CASE_LOG": str(invocation_log),
+            "CATALOG_ROOT": str(catalog_root),
+            "NSIDE": "8",
+            "LAUNCH_DELAY_SECONDS": "0",
+            "POLL_SECONDS": "0",
+            "SKIP_COMPLETED": "0",
+        }
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            str(scripts / SOURCE_BATCH_WRAPPER.name),
+            "0",
+            "9",
+            "both",
+            "20",
+        ],
+        cwd=repository,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    invocations = invocation_log.read_text(encoding="utf-8").splitlines()
+    expected = {
+        f"{repop_id} {scenario}"
+        for repop_id in range(10)
+        for scenario in ("fragile", "resilient")
+    }
+    assert set(invocations) == expected
+    assert len(invocations) == 20
+    assert "Maximum jobs:     20" in result.stdout
+    assert "Launched:   20" in result.stdout
+    assert "Succeeded:  20" in result.stdout
+
+
 def test_batch_cleanup_option_does_not_change_skip_completed(tmp_path):
     repository = tmp_path / "auriga-pipeline"
     scripts = repository / "scripts"

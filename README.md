@@ -402,6 +402,49 @@ The cut logic uses the same proxies as the diagnostics: pointlike uses `Js`, ext
 
 If no cut variables are set, no subhalo cuts are applied.
 
+### Optional dark-subhalo selection
+
+Catalogue preparation accepts an inclusive physical Vmax ceiling through
+`--max-vmax-km-s`.  The one-case and batch wrappers expose the same option as
+`MAX_SUBHALO_VMAX_KM_S`.  It is unset by default, so existing commands retain
+the full-population behavior and paths.
+
+The reviewed dark-only configuration is recorded in
+`configs/dark_subhalo_selection.env`:
+
+```bash
+source configs/dark_subhalo_selection.env
+```
+
+It selects `Vmax <= 8 km/s` before angular classification, J_ref calculation,
+and catalogue significance cuts, while retaining NSIDE 2048 and the
+provisional pointlike and extended fractions of `1e-3`.  Sourcing the file
+only sets environment variables; it does not start a run.
+
+Selection-dependent products are isolated below:
+
+```text
+outputs/clumpy/dark_vmax_le_8kms/<scenario>/
+```
+
+The directory preserves the established per-scenario layout beneath the new
+population namespace.  Raw lists, pointlike FITS, generated parameters,
+CLUMPY outputs, correction products, logs, totals, resume checks, and batch
+completion checks therefore cannot resolve to existing full-population paths.
+Pointlike FITS files additionally record `VMAXCUT` and `VMAXMAX`; reuse rejects
+a file whose population selection differs.  Extended-list headers record the
+same physical boundary.  Existing legacy full-population FITS without these
+new cards remain reusable when the option is disabled.
+
+The isolated namespace is the default. Replacing an established product tree
+in place is available only with `DARK_INPLACE_REPLACE=1`, an explicitly set
+absolute `CLUMPY_OUTPUT_ROOT`, and an absolute `DARK_INPLACE_REQUIRED_ROOT`
+that contains it. This guarded mode accepts only the reviewed `Vmax <= 8`
+configuration with both cut fractions set to `1e-3`; it removes only the
+selected scenario/repopulation products, preserves HDF5 catalogues and
+unrelated files, and treats a case as complete only when its dark-replacement
+completion marker matches the requested run.
+
 An existing pointlike FITS is reused by default when its HEALPix structure,
 scenario, repopulation ID, angular threshold, and pointlike-cut metadata match
 the current run. When `POINTLIKE_CUT_F` is enabled, the stored `JREF` must also
