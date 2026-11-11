@@ -95,7 +95,12 @@ REPOP_TAG=$(printf "repop_%04d" "$REPOP_ID")
 
 SCRIPTS_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd -- "${SCRIPTS_DIR}/.." && pwd)"
-BASE_RUN_DIR="${REPOSITORY_ROOT}/outputs/clumpy"
+DEFAULT_BASE_RUN_DIR="${REPOSITORY_ROOT}/outputs/clumpy"
+CLUMPY_OUTPUT_ROOT_EXPLICIT=0
+if [ -n "${CLUMPY_OUTPUT_ROOT+x}" ]; then
+    CLUMPY_OUTPUT_ROOT_EXPLICIT=1
+fi
+BASE_RUN_DIR="${CLUMPY_OUTPUT_ROOT:-${DEFAULT_BASE_RUN_DIR}}"
 CATALOG_ROOT="${CATALOG_ROOT:-${REPOSITORY_ROOT}/outputs}"
 
 # Set CLUMPY_EXECUTABLE to the CLUMPY binary or wrapper.
@@ -109,6 +114,9 @@ NSIDE="${NSIDE:-${DEFAULT_NSIDE}}"
 EXTENDED_CUT_F="${EXTENDED_CUT_F:-}"
 POINTLIKE_CUT_F="${POINTLIKE_CUT_F:-}"
 FORCE_POINTLIKE="${FORCE_POINTLIKE:-0}"
+MAX_SUBHALO_VMAX_KM_S="${MAX_SUBHALO_VMAX_KM_S:-}"
+DARK_INPLACE_REPLACE="${DARK_INPLACE_REPLACE:-0}"
+DARK_INPLACE_REQUIRED_ROOT="${DARK_INPLACE_REQUIRED_ROOT:-/dados5}"
 
 if ! [[ "${NSIDE}" =~ ^[0-9]+$ ]] || (( NSIDE < 1 || (NSIDE & (NSIDE - 1)) != 0 )); then
     echo "ERROR: NSIDE must be a positive power of two."
@@ -118,6 +126,66 @@ fi
 if [ "${FORCE_POINTLIKE}" != "0" ] && [ "${FORCE_POINTLIKE}" != "1" ]; then
     echo "ERROR: FORCE_POINTLIKE must be 0 or 1."
     exit 1
+fi
+
+if [ "${DARK_INPLACE_REPLACE}" != "0" ] \
+    && [ "${DARK_INPLACE_REPLACE}" != "1" ]; then
+    echo "ERROR: DARK_INPLACE_REPLACE must be 0 or 1." >&2
+    exit 1
+fi
+
+if [ -n "${MAX_SUBHALO_VMAX_KM_S}" ]; then
+    if ! [[ "${MAX_SUBHALO_VMAX_KM_S}" =~ ^[0-9]+([.][0-9]+)?$ ]] \
+        || [[ "${MAX_SUBHALO_VMAX_KM_S}" =~ ^0+([.]0+)?$ ]]; then
+        echo "ERROR: MAX_SUBHALO_VMAX_KM_S must be a positive decimal number." >&2
+        exit 1
+    fi
+    VMAX_PATH_VALUE=$(printf "%s" "${MAX_SUBHALO_VMAX_KM_S}" \
+        | sed -E 's/^0+([0-9])/\1/; s/0+$//; s/[.]$//; s/[.]/p/')
+    POPULATION_TAG="dark_vmax_le_${VMAX_PATH_VALUE}kms"
+else
+    POPULATION_TAG="full"
+fi
+
+if [ "${DARK_INPLACE_REPLACE}" = "1" ]; then
+    if [ "${RUN_MODE}" != "normal" ]; then
+        echo "ERROR: in-place dark replacement requires a complete normal run." >&2
+        exit 1
+    fi
+    if [ "${CLUMPY_OUTPUT_ROOT_EXPLICIT}" != "1" ]; then
+        echo "ERROR: in-place dark replacement requires explicit CLUMPY_OUTPUT_ROOT." >&2
+        exit 1
+    fi
+    if [ "${MAX_SUBHALO_VMAX_KM_S}" != "8" ] \
+        || [ "${EXTENDED_CUT_F}" != "1e-3" ] \
+        || [ "${POINTLIKE_CUT_F}" != "1e-3" ]; then
+        echo "ERROR: in-place replacement is restricted to Vmax<=8 and both cuts=1e-3." >&2
+        exit 1
+    fi
+    if [[ "${BASE_RUN_DIR}" != /* ]] || [[ "${DARK_INPLACE_REQUIRED_ROOT}" != /* ]]; then
+        echo "ERROR: replacement output and required roots must be absolute paths." >&2
+        exit 1
+    fi
+    if [ ! -d "${BASE_RUN_DIR}" ] || [ ! -d "${DARK_INPLACE_REQUIRED_ROOT}" ]; then
+        echo "ERROR: replacement output and required roots must already exist." >&2
+        exit 1
+    fi
+    BASE_RUN_DIR="$(realpath -e -- "${BASE_RUN_DIR}")"
+    REQUIRED_ROOT_RESOLVED="$(realpath -e -- "${DARK_INPLACE_REQUIRED_ROOT}")"
+    if [ "${BASE_RUN_DIR}" != "${REQUIRED_ROOT_RESOLVED}" ] \
+        && [[ "${BASE_RUN_DIR}" != "${REQUIRED_ROOT_RESOLVED}/"* ]]; then
+        echo "ERROR: replacement output root is outside the required storage root:" >&2
+        echo "  output:   ${BASE_RUN_DIR}" >&2
+        echo "  required: ${REQUIRED_ROOT_RESOLVED}" >&2
+        exit 1
+    fi
+    POPULATION_RUN_ROOT="${BASE_RUN_DIR}"
+else
+    if [ -n "${MAX_SUBHALO_VMAX_KM_S}" ]; then
+        POPULATION_RUN_ROOT="${BASE_RUN_DIR}/${POPULATION_TAG}"
+    else
+        POPULATION_RUN_ROOT="${BASE_RUN_DIR}"
+    fi
 fi
 
 NSIDE_SUFFIX="_nside${NSIDE}"
@@ -171,7 +239,7 @@ CLUMPY_DATA="$(cd -- "$CLUMPY_DATA" && pwd -P)"
 export CLUMPY_DATA
 CLUMPY="$CLUMPY_RESOLVED"
 
-CASE_DIR="${BASE_RUN_DIR}/${SCENARIO}"
+CASE_DIR="${POPULATION_RUN_ROOT}/${SCENARIO}"
 
 RAW_PARAM="${CASE_DIR}/params/generated/${REPOP_TAG}_raw_params${NSIDE_SUFFIX}.txt"
 CORRECTED_PARAM="${CASE_DIR}/params/generated/${REPOP_TAG}_corrected_params${NSIDE_SUFFIX}.txt"
@@ -195,6 +263,48 @@ TOTAL_FITS="${TOTAL_OUTPUT_DIR}/auriga_total_nside${NSIDE}.fits"
 CATALOG_H5="${CATALOG_ROOT}/${REPOP_TAG}/fullrepop_hydro_${SCENARIO}.h5"
 CORRECTED_LIST="${CASE_DIR}/lists/corrected/${REPOP_TAG}_rhocorr${NSIDE_SUFFIX}.txt"
 CORRECTION_OUTPUT_DIR="${CASE_DIR}/logs/correction/${REPOP_RUN_TAG}"
+COMPLETION_MARKER="${CASE_DIR}/metadata/dark_replacement/${REPOP_RUN_TAG}.complete"
+
+validate_population_pointlike() {
+    local -a validate_args
+    validate_args=(
+        "${REPOP_ID}" "${SCENARIO}"
+        --nside "${NSIDE}"
+        --catalog-root "${CATALOG_ROOT}"
+        --clumpy-root "${POPULATION_RUN_ROOT}"
+        --validate-pointlike-only
+    )
+    if [ -n "${MAX_SUBHALO_VMAX_KM_S}" ]; then
+        validate_args+=(
+            --max-vmax-km-s "${MAX_SUBHALO_VMAX_KM_S}"
+        )
+    fi
+    if [ "${DARK_INPLACE_REPLACE}" = "1" ]; then
+        validate_args+=(--allow-inplace-selected-output)
+    fi
+    "${PYTHON}" "${SCRIPTS_DIR}/prepare_subhalo_components.py" \
+        "${validate_args[@]}"
+}
+
+validate_population_raw_list() {
+    if [ -z "${MAX_SUBHALO_VMAX_KM_S}" ]; then
+        return 0
+    fi
+    awk -v expected="${MAX_SUBHALO_VMAX_KM_S}" '
+        /^# Physical Vmax selection: Vmax <= / {
+            found = 1
+            if ($(NF - 1) + 0 == expected + 0) {
+                matched = 1
+            }
+        }
+        END { exit !(found && matched) }
+    ' "${RAW_LIST}" || {
+        echo "ERROR: raw list Vmax-selection metadata does not match:" >&2
+        echo "  expected Vmax <= ${MAX_SUBHALO_VMAX_KM_S} km/s" >&2
+        echo "  ${RAW_LIST}" >&2
+        return 1
+    }
+}
 
 cleanup_primary_raw_fits() {
     local base_run_resolved raw_output_resolved expected_raw_output
@@ -214,7 +324,7 @@ cleanup_primary_raw_fits() {
         echo "  ${RAW_OUTPUT_DIR}" >&2
         return 1
     }
-    expected_raw_output="${base_run_resolved}/${SCENARIO}/outputs/raw_clumpy/${REPOP_RUN_TAG}"
+    expected_raw_output="$(realpath -m -- "${POPULATION_RUN_ROOT}")/${SCENARIO}/outputs/raw_clumpy/${REPOP_RUN_TAG}"
 
     if [ "${raw_output_resolved}" != "${expected_raw_output}" ]; then
         echo "ERROR: refusing raw FITS cleanup from an unexpected resolved directory:" >&2
@@ -269,6 +379,9 @@ echo "SCENARIO:  ${SCENARIO}"
 echo "NSIDE:     ${NSIDE}"
 echo "Run tag:   ${REPOP_RUN_TAG}"
 echo "Run mode:  ${RUN_MODE}"
+echo "Population: ${POPULATION_TAG}"
+echo "Population output root: ${POPULATION_RUN_ROOT}"
+echo "In-place dark replacement: ${DARK_INPLACE_REPLACE}"
 echo "Discard stale downstream: ${DISCARD_STALE_DOWNSTREAM}"
 echo "Cleanup raw FITS: ${CLEANUP_RAW_FITS}"
 echo "Catalogue root: ${CATALOG_ROOT}"
@@ -278,10 +391,82 @@ echo "Cuts:"
 echo "  EXTENDED_CUT_F:      ${EXTENDED_CUT_F:-none}"
 echo "  POINTLIKE_CUT_F:     ${POINTLIKE_CUT_F:-none}"
 echo "  FORCE_POINTLIKE:     ${FORCE_POINTLIKE}"
+echo "  MAX_SUBHALO_VMAX_KM_S: ${MAX_SUBHALO_VMAX_KM_S:-none (full population)}"
 echo "  Extended aperture:   hp.max_pixrad(NSIDE), derived automatically"
 echo "Time:      $(date)"
 echo "======================================================================"
 echo
+
+purge_inplace_case_products() {
+    local case_root target resolved
+    local -a targets
+
+    if [ "${DARK_INPLACE_REPLACE}" != "1" ]; then
+        return 0
+    fi
+
+    if [ ! -s "${CATALOG_H5}" ]; then
+        echo "ERROR: authoritative HDF5 is missing or empty; no products were removed:" >&2
+        echo "  ${CATALOG_H5}" >&2
+        return 1
+    fi
+
+    case_root="$(realpath -m -- "${CASE_DIR}")"
+    targets=(
+        "${RAW_PARAM}"
+        "${CORRECTED_PARAM}"
+        "${RAW_LIST}"
+        "${POINTLIKE_FITS}"
+        "${RAW_CLUMPY_LOG}"
+        "${CORRECTED_CLUMPY_LOG}"
+        "${RAW_OUTPUT_DIR}"
+        "${CORRECTED_OUTPUT_DIR}"
+        "${TOTAL_OUTPUT_DIR}"
+        "${CORRECTED_LIST}"
+        "${CORRECTION_OUTPUT_DIR}"
+        "${COMPLETION_MARKER}"
+    )
+
+    for target in "${targets[@]}"; do
+        resolved="$(realpath -m -- "${target}")"
+        if [[ "${resolved}" != "${case_root}/"* ]]; then
+            echo "ERROR: refusing replacement target outside the scenario tree:" >&2
+            echo "  ${resolved}" >&2
+            return 1
+        fi
+    done
+
+    echo "Removing stale products for ${REPOP_TAG} ${SCENARIO} only:"
+    for target in "${targets[@]}"; do
+        if [ -e "${target}" ] || [ -L "${target}" ]; then
+            echo "  ${target}"
+            rm -rf -- "${target}"
+        fi
+    done
+}
+
+write_completion_marker() {
+    local marker_tmp
+    if [ "${DARK_INPLACE_REPLACE}" != "1" ]; then
+        return 0
+    fi
+    mkdir -p "$(dirname -- "${COMPLETION_MARKER}")"
+    marker_tmp="$(mktemp "${COMPLETION_MARKER}.tmp.XXXXXX")"
+    {
+        echo "FORMAT=auriga_dark_replacement_v1"
+        echo "REPOP_ID=${REPOP_ID}"
+        echo "SCENARIO=${SCENARIO}"
+        echo "NSIDE=${NSIDE}"
+        echo "MAX_SUBHALO_VMAX_KM_S=${MAX_SUBHALO_VMAX_KM_S}"
+        echo "EXTENDED_CUT_F=${EXTENDED_CUT_F}"
+        echo "POINTLIKE_CUT_F=${POINTLIKE_CUT_F}"
+        echo "TOTAL_FITS=${TOTAL_FITS}"
+        echo "COMPLETED_UTC=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "${marker_tmp}"
+    mv -- "${marker_tmp}" "${COMPLETION_MARKER}"
+}
+
+purge_inplace_case_products
 
 if [ "${RUN_MODE}" = "from-correction" ]; then
     echo "----------------------------------------------------------------------"
@@ -300,22 +485,20 @@ if [ "${RUN_MODE}" = "from-correction" ]; then
         fi
     done
 
+    validate_population_raw_list
+
     echo "Validating authoritative HDF5 and raw list/log identity (read only)..."
     "${PYTHON}" "${SCRIPTS_DIR}/correct_rhos_from_clumpy_raw.py" \
         "${REPOP_ID}" "${SCENARIO}" \
         --nside "${NSIDE}" \
         --catalog-root "${CATALOG_ROOT}" \
-        --clumpy-root "${BASE_RUN_DIR}" \
+        --clumpy-root "${POPULATION_RUN_ROOT}" \
         --raw-list "${RAW_LIST}" \
         --raw-rendered-log "${RAW_RENDERED_LOG}" \
         --validate-only
 
     echo "Validating existing point-like FITS (read only)..."
-    "${PYTHON}" "${SCRIPTS_DIR}/prepare_subhalo_components.py" \
-        "${REPOP_ID}" "${SCENARIO}" \
-        --nside "${NSIDE}" \
-        --catalog-root "${CATALOG_ROOT}" \
-        --validate-pointlike-only
+    validate_population_pointlike
 
     resolve_product_path() {
         realpath -m -- "$1"
@@ -413,7 +596,7 @@ if [ "${RUN_MODE}" = "from-correction" ]; then
         "${REPOP_ID}" "${SCENARIO}" \
         --nside "${NSIDE}" \
         --catalog-root "${CATALOG_ROOT}" \
-        --clumpy-root "${BASE_RUN_DIR}" \
+        --clumpy-root "${POPULATION_RUN_ROOT}" \
         --raw-list "${RAW_LIST}" \
         --raw-rendered-log "${RAW_RENDERED_LOG}" \
         --output-list "${STAGE_CORRECTED_LIST}" \
@@ -607,8 +790,14 @@ if [ -f "$FINAL_FITS" ] && [ -s "$FINAL_FITS" ]; then
     echo "  Corrected CLUMPY: $FINAL_FITS"
     echo "  Pointlike:        $POINTLIKE_FITS"
 
+    echo "Validating point-like population provenance before resume..."
+    validate_population_pointlike
+
     "${PYTHON}" "${SCRIPTS_DIR}/combine_clumpy_pointlike.py" \
-        "${REPOP_ID}" "${SCENARIO}" --nside "${NSIDE}"
+        "${REPOP_ID}" "${SCENARIO}" --nside "${NSIDE}" \
+        --corrected-fits "${FINAL_FITS}" \
+        --pointlike-fits "${POINTLIKE_FITS}" \
+        --output-fits "${TOTAL_FITS}"
 
     if [ ! -f "$TOTAL_FITS" ] || [ ! -s "$TOTAL_FITS" ]; then
         echo "ERROR: total FITS was not created or is empty:"
@@ -637,7 +826,16 @@ PREPARE_ARGS=(
     "${SCENARIO}"
     "--nside" "${NSIDE}"
     "--catalog-root" "${CATALOG_ROOT}"
+    "--clumpy-root" "${POPULATION_RUN_ROOT}"
 )
+
+if [ -n "${MAX_SUBHALO_VMAX_KM_S}" ]; then
+    PREPARE_ARGS+=("--max-vmax-km-s" "${MAX_SUBHALO_VMAX_KM_S}")
+fi
+
+if [ "${DARK_INPLACE_REPLACE}" = "1" ]; then
+    PREPARE_ARGS+=("--allow-inplace-selected-output")
+fi
 
 if [ -n "${EXTENDED_CUT_F}" ]; then
     PREPARE_ARGS+=("--extended-cut-f" "${EXTENDED_CUT_F}")
@@ -675,7 +873,10 @@ echo "Step 2/7: generate raw CLUMPY parameter file"
 echo "----------------------------------------------------------------------"
 
 "${PYTHON}" "${SCRIPTS_DIR}/generate_clumpy_params.py" \
-    "${REPOP_ID}" "${SCENARIO}" raw --nside "${NSIDE}"
+    "${REPOP_ID}" "${SCENARIO}" raw --nside "${NSIDE}" \
+    --input-list "${RAW_LIST}" \
+    --output-dir "${RAW_OUTPUT_DIR}" \
+    --output-param "${RAW_PARAM}"
 
 if [ ! -f "$RAW_PARAM" ]; then
     echo "ERROR: raw parameter file was not created:"
@@ -714,7 +915,7 @@ echo "----------------------------------------------------------------------"
 
 "${PYTHON}" "${SCRIPTS_DIR}/correct_rhos_from_clumpy_raw.py" \
     "${REPOP_ID}" "${SCENARIO}" --nside "${NSIDE}" \
-    --catalog-root "${CATALOG_ROOT}" --clumpy-root "${BASE_RUN_DIR}"
+    --catalog-root "${CATALOG_ROOT}" --clumpy-root "${POPULATION_RUN_ROOT}"
 
 if [ ! -f "$CORRECTED_LIST" ]; then
     echo "ERROR: corrected list was not created:"
@@ -732,7 +933,10 @@ echo "Step 5/7: generate corrected CLUMPY parameter file"
 echo "----------------------------------------------------------------------"
 
 "${PYTHON}" "${SCRIPTS_DIR}/generate_clumpy_params.py" \
-    "${REPOP_ID}" "${SCENARIO}" corrected --nside "${NSIDE}"
+    "${REPOP_ID}" "${SCENARIO}" corrected --nside "${NSIDE}" \
+    --input-list "${CORRECTED_LIST}" \
+    --output-dir "${CORRECTED_OUTPUT_DIR}" \
+    --output-param "${CORRECTED_PARAM}"
 
 if [ ! -f "$CORRECTED_PARAM" ]; then
     echo "ERROR: corrected parameter file was not created:"
@@ -776,7 +980,10 @@ echo "Step 7/7: combine corrected CLUMPY and pointlike FITS"
 echo "----------------------------------------------------------------------"
 
 "${PYTHON}" "${SCRIPTS_DIR}/combine_clumpy_pointlike.py" \
-    "${REPOP_ID}" "${SCENARIO}" --nside "${NSIDE}"
+    "${REPOP_ID}" "${SCENARIO}" --nside "${NSIDE}" \
+    --corrected-fits "${FINAL_FITS}" \
+    --pointlike-fits "${POINTLIKE_FITS}" \
+    --output-fits "${TOTAL_FITS}"
 
 if [ ! -f "$TOTAL_FITS" ] || [ ! -s "$TOTAL_FITS" ]; then
     echo "ERROR: total FITS was not created or is empty:"
@@ -785,6 +992,7 @@ if [ ! -f "$TOTAL_FITS" ] || [ ! -s "$TOTAL_FITS" ]; then
 fi
 
 cleanup_primary_raw_fits
+write_completion_marker
 
 echo
 echo "======================================================================"

@@ -24,7 +24,6 @@ scenario="$2"
 all_args=("$@")
 printf -v repop_tag 'repop_%04d' "$repop_id"
 nside="${NSIDE}"
-case_dir="${FAKE_REPO_ROOT}/outputs/clumpy/${scenario}"
 
 option_value() {
     local option="$1"
@@ -48,6 +47,12 @@ has_option() {
     done
     return 1
 }
+
+clumpy_root="$(option_value --clumpy-root || true)"
+if [ -z "$clumpy_root" ]; then
+    clumpy_root="${FAKE_REPO_ROOT}/outputs/clumpy"
+fi
+case_dir="${clumpy_root}/${scenario}"
 
 case "$script_name" in
     prepare_subhalo_components.py)
@@ -258,8 +263,14 @@ def assert_two_clumpy_stages(result, call_log, expected_data):
     assert corrected[3].endswith("repop_0007_corrected_params_nside8.txt")
 
 
-def case_paths(repository):
-    case_dir = repository / "outputs" / "clumpy" / "resilient"
+def case_paths(repository, population_tag=None, run_root=None):
+    if run_root is None:
+        run_root = repository / "outputs" / "clumpy"
+    else:
+        run_root = Path(run_root)
+    if population_tag is not None:
+        run_root /= population_tag
+    case_dir = run_root / "resilient"
     repop_dir = "repop_0007_nside8"
     basename = "annihil_gal2D_LOS0_0_FOV360x180_nside8"
 
@@ -331,6 +342,9 @@ def case_paths(repository):
         ),
         "correction_dir": case_dir / "logs" / "correction" / repop_dir,
         "total_output_dir": case_dir / "outputs" / "total" / repop_dir,
+        "completion_marker": (
+            case_dir / "metadata" / "dark_replacement" / f"{repop_dir}.complete"
+        ),
     }
 
 
@@ -387,6 +401,34 @@ def test_default_run_preserves_primary_raw_fits(tmp_path):
     assert paths["raw_fits"].read_text() == "fake raw fits\n"
     assert paths["raw_log"].is_file()
     assert paths["total_fits"].is_file()
+
+
+def test_dark_selection_uses_isolated_paths_and_forwards_threshold(tmp_path):
+    repository, fake_python, call_log = make_test_repository(tmp_path)
+    executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
+
+    result = run_wrapper(
+        repository,
+        fake_python,
+        call_log,
+        executable,
+        MAX_SUBHALO_VMAX_KM_S="8",
+        EXTENDED_CUT_F="1e-3",
+        POINTLIKE_CUT_F="1e-3",
+    )
+    dark_paths = case_paths(repository, "dark_vmax_le_8kms")
+    full_paths = case_paths(repository)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert dark_paths["raw_list"].is_file()
+    assert dark_paths["pointlike_fits"].is_file()
+    assert dark_paths["corrected_list"].is_file()
+    assert dark_paths["total_fits"].is_file()
+    assert not full_paths["raw_list"].exists()
+    assert not full_paths["pointlike_fits"].exists()
+    arguments = call_log.with_suffix(".python-args.tsv").read_text()
+    assert "--max-vmax-km-s 8" in arguments
+    assert str(repository / "outputs/clumpy/dark_vmax_le_8kms") in arguments
 
 
 def test_cleanup_removes_only_primary_raw_fits_after_success(tmp_path):
@@ -1114,3 +1156,179 @@ def test_invalid_or_missing_data_fails_before_clumpy_execution(tmp_path, explici
     assert "CLUMPY_DATA is not a valid CLUMPY data directory" in result.stderr
     assert not call_log.exists()
     assert not (repository / "outputs").exists()
+
+
+def test_inplace_dark_replacement_purges_only_selected_case_and_runs_fresh(tmp_path):
+    repository, fake_python, call_log = make_test_repository(tmp_path)
+    executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
+    storage_root = tmp_path / "dados5"
+    output_root = storage_root / "clumpy"
+    output_root.mkdir(parents=True)
+    paths = case_paths(repository, run_root=output_root)
+
+    catalog = repository / "outputs/repop_0007/fullrepop_hydro_resilient.h5"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text("authoritative catalogue\n", encoding="utf-8")
+
+    paths["raw_list"].parent.mkdir(parents=True)
+    paths["raw_list"].write_text("old full raw list\n", encoding="utf-8")
+    paths["pointlike_fits"].parent.mkdir(parents=True)
+    paths["pointlike_fits"].write_text("old full pointlike\n", encoding="utf-8")
+    paths["raw_output_dir"].mkdir(parents=True)
+    create_optional_raw_products(paths)
+    create_stale_downstream_products(paths)
+
+    unrelated_repop = (
+        output_root
+        / "resilient/outputs/total/repop_0008_nside8/auriga_total_nside8.fits"
+    )
+    unrelated_repop.parent.mkdir(parents=True)
+    unrelated_repop.write_text("must survive\n", encoding="utf-8")
+    unrelated_scenario = (
+        output_root
+        / "fragile/outputs/total/repop_0007_nside8/auriga_total_nside8.fits"
+    )
+    unrelated_scenario.parent.mkdir(parents=True)
+    unrelated_scenario.write_text("must survive\n", encoding="utf-8")
+    diagnostic = output_root / "resilient/diagnostics/keep.txt"
+    diagnostic.parent.mkdir(parents=True)
+    diagnostic.write_text("must survive\n", encoding="utf-8")
+
+    result = run_wrapper(
+        repository,
+        fake_python,
+        call_log,
+        executable,
+        CLUMPY_OUTPUT_ROOT=str(output_root),
+        DARK_INPLACE_REQUIRED_ROOT=str(storage_root),
+        DARK_INPLACE_REPLACE="1",
+        MAX_SUBHALO_VMAX_KM_S="8",
+        EXTENDED_CUT_F="1e-3",
+        POINTLIKE_CUT_F="1e-3",
+    )
+
+    assert_two_clumpy_stages(result, call_log, executable.parents[1] / "data")
+    assert paths["raw_list"].read_text() == "raw list\n"
+    assert paths["pointlike_fits"].read_text() == "fake fits\n"
+    assert paths["corrected_list"].read_text() == "corrected list\n"
+    assert paths["total_fits"].read_text() == "fake fits\n"
+    marker = paths["completion_marker"].read_text()
+    assert "FORMAT=auriga_dark_replacement_v1" in marker
+    assert "MAX_SUBHALO_VMAX_KM_S=8" in marker
+    assert "EXTENDED_CUT_F=1e-3" in marker
+    assert "POINTLIKE_CUT_F=1e-3" in marker
+    assert unrelated_repop.read_text() == "must survive\n"
+    assert unrelated_scenario.read_text() == "must survive\n"
+    assert diagnostic.read_text() == "must survive\n"
+    assert catalog.read_text() == "authoritative catalogue\n"
+    python_args = call_log.with_suffix(".python-args.tsv").read_text()
+    assert "--allow-inplace-selected-output" in python_args
+    assert f"--clumpy-root {output_root}" in python_args
+
+
+def test_inplace_replacement_requires_explicit_output_root_before_deletion(tmp_path):
+    repository, fake_python, call_log = make_test_repository(tmp_path)
+    executable, _ = make_clumpy_tree(tmp_path, "bin/clumpy")
+    sentinel = repository / "outputs/clumpy/resilient/sentinel.txt"
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_text("must survive\n", encoding="utf-8")
+
+    result = run_wrapper(
+        repository,
+        fake_python,
+        call_log,
+        executable,
+        DARK_INPLACE_REPLACE="1",
+        MAX_SUBHALO_VMAX_KM_S="8",
+        EXTENDED_CUT_F="1e-3",
+        POINTLIKE_CUT_F="1e-3",
+    )
+
+    assert result.returncode != 0
+    assert "requires explicit CLUMPY_OUTPUT_ROOT" in result.stderr
+    assert sentinel.read_text() == "must survive\n"
+    assert not call_log.exists()
+
+
+@pytest.mark.parametrize("valid_marker", [False, True])
+def test_batch_replacement_skips_only_dark_completed_products(tmp_path, valid_marker):
+    repository = tmp_path / "auriga-pipeline"
+    scripts = repository / "scripts"
+    scripts.mkdir(parents=True)
+    shutil.copy2(SOURCE_BATCH_WRAPPER, scripts / SOURCE_BATCH_WRAPPER.name)
+    invocation_log = tmp_path / "one-case-invocation.txt"
+    write_executable(
+        scripts / SOURCE_WRAPPER.name,
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" > \"$BATCH_ONE_CASE_LOG\"\n",
+    )
+
+    catalog_root = tmp_path / "catalogues"
+    catalog = catalog_root / "repop_0007/fullrepop_hydro_resilient.h5"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_text("catalogue\n", encoding="utf-8")
+    storage_root = tmp_path / "dados5"
+    output_root = storage_root / "clumpy"
+    total = (
+        output_root
+        / "resilient/outputs/total/repop_0007_nside8/auriga_total_nside8.fits"
+    )
+    total.parent.mkdir(parents=True)
+    total.write_text("existing total\n", encoding="utf-8")
+    if valid_marker:
+        marker = (
+            output_root
+            / "resilient/metadata/dark_replacement/repop_0007_nside8.complete"
+        )
+        marker.parent.mkdir(parents=True)
+        marker.write_text(
+            "FORMAT=auriga_dark_replacement_v1\n"
+            "REPOP_ID=7\n"
+            "SCENARIO=resilient\n"
+            "NSIDE=8\n"
+            "MAX_SUBHALO_VMAX_KM_S=8\n"
+            "EXTENDED_CUT_F=1e-3\n"
+            "POINTLIKE_CUT_F=1e-3\n"
+            f"TOTAL_FITS={total}\n",
+            encoding="utf-8",
+        )
+
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "BATCH_ONE_CASE_LOG": str(invocation_log),
+            "CATALOG_ROOT": str(catalog_root),
+            "CLUMPY_OUTPUT_ROOT": str(output_root),
+            "DARK_INPLACE_REQUIRED_ROOT": str(storage_root),
+            "DARK_INPLACE_REPLACE": "1",
+            "MAX_SUBHALO_VMAX_KM_S": "8",
+            "EXTENDED_CUT_F": "1e-3",
+            "POINTLIKE_CUT_F": "1e-3",
+            "NSIDE": "8",
+            "LAUNCH_DELAY_SECONDS": "0",
+            "POLL_SECONDS": "0",
+            "SKIP_COMPLETED": "1",
+        }
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            str(scripts / SOURCE_BATCH_WRAPPER.name),
+            "7",
+            "7",
+            "resilient",
+            "1",
+        ],
+        cwd=repository,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert invocation_log.exists() is (not valid_marker)
+    if valid_marker:
+        assert "Skipped:    1" in result.stdout
+    else:
+        assert invocation_log.read_text().strip() == "7 resilient"
+        assert "Skipped:    0" in result.stdout
