@@ -599,6 +599,14 @@ class RepopAlgorithm:
     def _make_halo_names(self, n_halos):
         """
         Generate canonical halo names after filtering, preserving row order.
+
+        The legacy hydro_res_ prefix is shared by hydro_resilient and
+        hydro_fragile; it does not identify the scenario. Keep it unchanged
+        for compatibility with saved catalogues and downstream readers.
+        The positive numeric suffix is the saved row index plus one, padded
+        to at least five digits. Correction and diagnostic readers rely on
+        this mapping. Names are local to each iteration's table; the scenario
+        is identified by the catalogue filename and pipeline context.
         """
         return np.array(
             [f"hydro_res_{i + 1:05d}" for i in range(n_halos)],
