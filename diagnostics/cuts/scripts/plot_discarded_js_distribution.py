@@ -23,7 +23,7 @@ plt.rcParams.update(
 )
 
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 POPULATIONS = ("all", "pointlike", "extended")
 CLI_POPULATIONS = ("combined",) + POPULATIONS
 SCENARIO_ORDER = ("fragile", "resilient")
@@ -87,10 +87,13 @@ def load_distribution(path: Path) -> dict[str, np.ndarray]:
             "requested_scenarios",
             "catalogue_repop_ids",
             "catalogue_scenarios",
+            "population_selection",
+            "max_vmax_km_s",
         }
         for population in POPULATIONS:
             required.add(f"hist_{population}")
             required.add(f"n_discarded_{population}")
+            required.add(f"max_j_rel_discarded_{population}")
 
         missing = sorted(required - set(data.files))
         if missing:
@@ -146,6 +149,35 @@ def load_distribution(path: Path) -> dict[str, np.ndarray]:
             )
 
     return output
+
+
+def maximum_discarded_by_scenario(
+    data: dict[str, np.ndarray],
+) -> list[dict[str, object]]:
+    """Return exact plotted-population maxima with their catalogue IDs."""
+    scenarios = np.asarray(data["catalogue_scenarios"], dtype=str)
+    repop_ids = np.asarray(data["catalogue_repop_ids"], dtype=np.int64)
+    summary = []
+    for scenario in _scenario_order(scenarios):
+        scenario_indices = np.flatnonzero(scenarios == scenario)
+        for population in ("pointlike", "extended"):
+            values = np.asarray(
+                data[f"max_j_rel_discarded_{population}"], dtype=np.float64
+            )[scenario_indices]
+            finite = np.flatnonzero(np.isfinite(values))
+            if finite.size == 0:
+                continue
+            local_index = int(finite[np.argmax(values[finite])])
+            catalogue_index = int(scenario_indices[local_index])
+            summary.append(
+                {
+                    "scenario": scenario,
+                    "population": population,
+                    "repop_id": int(repop_ids[catalogue_index]),
+                    "max_j_rel_discarded": float(values[local_index]),
+                }
+            )
+    return summary
 
 
 def rebin_histograms(
@@ -470,6 +502,17 @@ def main() -> None:
     args = parse_args()
     formats = parse_formats(args.formats)
     data = load_distribution(args.input_npz)
+    print(
+        "Population selection: "
+        f"{str(data['population_selection'])}; "
+        f"max_vmax_km_s={float(data['max_vmax_km_s']):g}"
+    )
+    for row in maximum_discarded_by_scenario(data):
+        print(
+            f"Maximum discarded Js/Js,max, {row['scenario']} "
+            f"{row['population']}: {row['max_j_rel_discarded']:.8e} "
+            f"(repop_{row['repop_id']:04d})"
+        )
     plot_distribution(
         data=data,
         population=args.population,

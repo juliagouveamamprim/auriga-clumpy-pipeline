@@ -4,10 +4,8 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import sys
 from pathlib import Path
-from typing import NamedTuple
 
 import h5py
 import numpy as np
@@ -16,17 +14,16 @@ import numpy as np
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from diagnostics.cuts.scripts.scan_catalogue_jsmax import (  # noqa: E402
-    CSV_FIELDS as JSMAX_CSV_FIELDS,
-    VALID_SCENARIOS,
-)
 from diagnostics.cuts.scripts.scan_central_pixel_cuts import (  # noqa: E402
+    apply_vmax_selection,
+    selection_tag,
     validate_nside,
 )
 from diagnostics.cuts.scripts.scan_relative_js_cumulative import (  # noqa: E402
     LOG_REL_MAX,
     LOG_REL_MIN,
     N_BINS_REL,
+    VALID_SCENARIOS,
     catalogue_path,
     parse_scenarios,
 )
@@ -42,7 +39,7 @@ from scripts.prepare_subhalo_components import (  # noqa: E402
 )
 
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 POPULATIONS = ("all", "pointlike", "extended")
 DEFAULT_F = 1.0e-3
 DEFAULT_NSIDE = 2048
@@ -68,11 +65,6 @@ POPULATION_SCALAR_FIELDS = (
 )
 
 
-class JsMaxRecord(NamedTuple):
-    n_saved: int
-    js_max: float
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -90,12 +82,6 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--jsmax-csv",
-        type=Path,
-        required=True,
-        help="CSV produced by scan_catalogue_jsmax.py.",
-    )
-    parser.add_argument(
         "--output-npz",
         type=Path,
         required=True,
@@ -111,6 +97,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--nside", type=int, default=DEFAULT_NSIDE)
     parser.add_argument("--f", type=float, default=DEFAULT_F)
+    parser.add_argument(
+        "--max-vmax-km-s",
+        type=float,
+        default=None,
+        help=(
+            "Optional inclusive Vmax ceiling in km/s, applied after the "
+            "production validity mask and before Js,max, J_pixel_ref, "
+            "morphology, and brightness cuts."
+        ),
+    )
     parser.add_argument("--log-rel-min", type=float, default=LOG_REL_MIN)
     parser.add_argument("--log-rel-max", type=float, default=LOG_REL_MAX)
     parser.add_argument("--n-bins", type=int, default=N_BINS_REL)
@@ -129,6 +125,7 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--n-bins must be positive.")
     if not np.isfinite(args.f) or args.f < 0.0:
         raise ValueError("--f must be finite and non-negative.")
+    selection_tag(args.max_vmax_km_s)
     if (
         not np.isfinite(args.log_rel_min)
         or not np.isfinite(args.log_rel_max)
@@ -142,68 +139,35 @@ def validate_args(args: argparse.Namespace) -> None:
     validate_nside(args.nside)
 
 
-def load_jsmax_lookup(
-    path: Path,
-    required_keys: set[tuple[str, int]],
-) -> dict[tuple[str, int], JsMaxRecord]:
-    """Load Js maxima by exact catalogue key, never by CSV row position."""
-    if not path.is_file():
-        raise FileNotFoundError(f"Js-max CSV not found: {path}")
-
-    lookup: dict[tuple[str, int], JsMaxRecord] = {}
-
-    with path.open(newline="", encoding="utf-8") as stream:
-        reader = csv.DictReader(stream)
-
-        if tuple(reader.fieldnames or ()) != JSMAX_CSV_FIELDS:
-            raise ValueError(
-                f"Unexpected columns in {path}: {reader.fieldnames}; "
-                f"expected {list(JSMAX_CSV_FIELDS)}."
-            )
-
-        for line_number, row in enumerate(reader, start=2):
-            try:
-                scenario = row["scenario"]
-                repop_id = int(row["repop_id"])
-                n_saved = int(row["n_saved"])
-                js_max = float(row["js_max"])
-            except (TypeError, ValueError) as error:
-                raise ValueError(
-                    f"Invalid Js-max row at {path}:{line_number}: {row}"
-                ) from error
-
-            key = (scenario, repop_id)
-
-            if scenario not in VALID_SCENARIOS or repop_id < 0:
-                raise ValueError(
-                    f"Invalid catalogue key at {path}:{line_number}: {key}"
-                )
-            if key in lookup:
-                raise ValueError(
-                    f"Duplicate Js-max entry at {path}:{line_number}: {key}"
-                )
-            if n_saved <= 0:
-                raise ValueError(
-                    f"Invalid n_saved at {path}:{line_number}: {n_saved}"
-                )
-            if not np.isfinite(js_max) or js_max <= 0.0:
-                raise ValueError(
-                    f"Invalid js_max at {path}:{line_number}: {js_max}"
-                )
-
-            lookup[key] = JsMaxRecord(n_saved=n_saved, js_max=js_max)
-
-    missing = sorted(required_keys - set(lookup))
-    if missing:
-        raise ValueError(
-            "Missing Js-max entry for requested catalogue(s): "
-            + ", ".join(
-                f"({scenario}, {repop_id})"
-                for scenario, repop_id in missing
-            )
-        )
-
-    return {key: lookup[key] for key in required_keys}
+def eligible_mask(
+    array: np.ndarray,
+    column_indices: dict[str, int],
+    max_vmax_km_s: float | None,
+    row_offset: int = 0,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Return production-valid and physically selected masks for one chunk."""
+    valid = build_valid_mask(
+        js=array[:, column_indices["Js"]],
+        d_earth=array[:, column_indices["D_Earth"]],
+        theta_s=array[:, column_indices["theta_s"]],
+        r_s=array[:, column_indices["r_s"]],
+        rho_s=array[:, column_indices["rho_s"]],
+        x_e=array[:, column_indices["Xearth"]],
+        y_e=array[:, column_indices["Yearth"]],
+        z_e=array[:, column_indices["Zearth"]],
+    )
+    physical_valid = valid.copy()
+    if max_vmax_km_s is None:
+        return physical_valid, valid, 0
+    return (
+        physical_valid,
+        *apply_vmax_selection(
+            valid,
+            array[:, column_indices["Vmax"]],
+            max_vmax_km_s,
+            row_offset=row_offset,
+        ),
+    )
 
 
 def empty_population(n_bins: int) -> dict[str, object]:
@@ -306,26 +270,19 @@ def classify_discarded(
     theta_min_deg: float,
     nside: int,
     j_cut: float,
+    max_vmax_km_s: float | None = None,
+    row_offset: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Apply the production validity, geometry, and cut conventions."""
     js = array[:, column_indices["Js"]]
     d_earth = array[:, column_indices["D_Earth"]]
     theta_s = array[:, column_indices["theta_s"]]
     r_s = array[:, column_indices["r_s"]]
-    rho_s = array[:, column_indices["rho_s"]]
-    x_e = array[:, column_indices["Xearth"]]
-    y_e = array[:, column_indices["Yearth"]]
-    z_e = array[:, column_indices["Zearth"]]
-
-    valid = build_valid_mask(
-        js=js,
-        d_earth=d_earth,
-        theta_s=theta_s,
-        r_s=r_s,
-        rho_s=rho_s,
-        x_e=x_e,
-        y_e=y_e,
-        z_e=z_e,
+    _, valid, _ = eligible_mask(
+        array,
+        column_indices,
+        max_vmax_km_s,
+        row_offset=row_offset,
     )
     pointlike = valid & (theta_s < theta_min_deg)
     extended = valid & (theta_s >= theta_min_deg)
@@ -345,7 +302,11 @@ def classify_discarded(
     return valid, pointlike_discarded, extended_discarded
 
 
-def read_catalogue_table(handle: h5py.File, path: Path):
+def read_catalogue_table(
+    handle: h5py.File,
+    path: Path,
+    max_vmax_km_s: float | None = None,
+):
     group_name = f"iteration_{ITERATION}"
     dataset_name = f"{group_name}/data"
 
@@ -362,25 +323,68 @@ def read_catalogue_table(handle: h5py.File, path: Path):
         name.decode("utf-8") if isinstance(name, bytes) else str(name)
         for name in data.attrs["column_names"]
     ]
-    missing = [name for name in REQUIRED_H5_COLUMNS if name not in column_names]
+    required_columns = list(REQUIRED_H5_COLUMNS)
+    if max_vmax_km_s is not None:
+        required_columns.append("Vmax")
+    missing = [name for name in required_columns if name not in column_names]
     if missing:
         raise KeyError(f"Missing required columns in {path}: {', '.join(missing)}")
 
     column_indices = {
         name: column_names.index(name)
-        for name in REQUIRED_H5_COLUMNS
+        for name in required_columns
     }
     return data, column_indices
 
 
+def scan_selected_js_max(
+    data,
+    column_indices: dict[str, int],
+    n_rows: int,
+    chunk_size: int,
+    max_vmax_km_s: float | None,
+) -> dict[str, object]:
+    """Find Js,max from the valid selected population before brightness cuts."""
+    js_max = -np.inf
+    n_physical_valid = 0
+    n_selected = 0
+    n_vmax_excluded = 0
+
+    for start in range(0, n_rows, chunk_size):
+        stop = min(start + chunk_size, n_rows)
+        array = data[start:stop]
+        physical_valid, selected, n_excluded = eligible_mask(
+            array,
+            column_indices,
+            max_vmax_km_s,
+            row_offset=start,
+        )
+        n_physical_valid += int(np.count_nonzero(physical_valid))
+        n_selected += int(np.count_nonzero(selected))
+        n_vmax_excluded += n_excluded
+        if np.any(selected):
+            js_max = max(
+                js_max,
+                float(np.max(array[selected, column_indices["Js"]])),
+            )
+
+    if not np.isfinite(js_max) or js_max <= 0.0:
+        raise RuntimeError("No valid subhalo remains in the selected population.")
+    return {
+        "js_max_cat": js_max,
+        "n_physical_valid_rows": n_physical_valid,
+        "n_selected_rows": n_selected,
+        "n_vmax_excluded": n_vmax_excluded,
+    }
+
+
 def process_catalogue(
     path: Path,
-    js_max_cat: float,
-    expected_n_saved: int,
     nside: int,
     f_value: float,
     chunk_size: int,
     log_relative_edges: np.ndarray,
+    max_vmax_km_s: float | None = None,
 ) -> dict[str, object]:
     theta_min_deg = round_up(
         healpix_pixel_size_deg(nside),
@@ -388,13 +392,18 @@ def process_catalogue(
     )
 
     with h5py.File(path, "r") as handle:
-        data, column_indices = read_catalogue_table(handle, path)
+        data, column_indices = read_catalogue_table(
+            handle, path, max_vmax_km_s
+        )
         n_rows = int(data.shape[0])
-        if n_rows != expected_n_saved:
-            raise ValueError(
-                f"Js-max provenance mismatch for {path}: CSV n_saved="
-                f"{expected_n_saved}, HDF5 rows={n_rows}."
-            )
+        selection_info = scan_selected_js_max(
+            data=data,
+            column_indices=column_indices,
+            n_rows=n_rows,
+            chunk_size=chunk_size,
+            max_vmax_km_s=max_vmax_km_s,
+        )
+        js_max_cat = float(selection_info["js_max_cat"])
         ref_info = compute_pixel_reference(
             data=data,
             column_indices=column_indices,
@@ -402,6 +411,7 @@ def process_catalogue(
             theta_min_deg=theta_min_deg,
             nside=nside,
             chunk_size=chunk_size,
+            max_vmax_km_s=max_vmax_km_s,
         )
         j_pixel_ref = float(ref_info["j_pixel_ref"])
         j_cut = f_value * j_pixel_ref
@@ -421,6 +431,8 @@ def process_catalogue(
                     theta_min_deg=theta_min_deg,
                     nside=nside,
                     j_cut=j_cut,
+                    max_vmax_km_s=max_vmax_km_s,
+                    row_offset=start,
                 )
             )
             n_valid_rows += int(np.count_nonzero(valid))
@@ -436,6 +448,13 @@ def process_catalogue(
                 js[extended_discarded],
                 js_max_cat,
                 log_relative_edges,
+            )
+
+        if n_valid_rows != selection_info["n_selected_rows"]:
+            raise RuntimeError(
+                f"Selected-population count mismatch for {path}: "
+                f"max scan={selection_info['n_selected_rows']}, "
+                f"cut scan={n_valid_rows}."
             )
 
     populations["all"] = combine_populations(
@@ -458,10 +477,15 @@ def process_catalogue(
             )
 
     result: dict[str, object] = {
+        "js_max_cat": js_max_cat,
         "j_pixel_ref": j_pixel_ref,
         "n_input_rows": n_rows,
         "n_valid_rows": n_valid_rows,
-        "n_invalid_input_rows": n_rows - n_valid_rows,
+        "n_physical_valid_rows": selection_info["n_physical_valid_rows"],
+        "n_invalid_input_rows": (
+            n_rows - int(selection_info["n_physical_valid_rows"])
+        ),
+        "n_vmax_excluded": selection_info["n_vmax_excluded"],
     }
     for population in POPULATIONS:
         population_result = populations[population]
@@ -477,6 +501,7 @@ def checkpoint_metadata(
     repop_ids: np.ndarray,
     log_relative_edges: np.ndarray,
 ) -> dict[str, object]:
+    max_vmax_km_s = getattr(args, "max_vmax_km_s", None)
     return {
         "f": float(args.f),
         "nside": int(args.nside),
@@ -491,7 +516,12 @@ def checkpoint_metadata(
         "requested_repop_ids": np.asarray(repop_ids, dtype=np.int64),
         "requested_scenarios": tuple(args.scenarios),
         "input_root": str(args.input_root.resolve()),
-        "jsmax_csv": str(args.jsmax_csv.resolve()),
+        "population_selection": selection_tag(max_vmax_km_s),
+        "max_vmax_km_s": (
+            float("nan")
+            if max_vmax_km_s is None
+            else float(max_vmax_km_s)
+        ),
     }
 
 
@@ -517,7 +547,12 @@ def checkpoint_payload(
             metadata["requested_scenarios"], dtype=np.str_
         ),
         "input_root": np.asarray(metadata["input_root"], dtype=np.str_),
-        "jsmax_csv": np.asarray(metadata["jsmax_csv"], dtype=np.str_),
+        "population_selection": np.asarray(
+            metadata["population_selection"], dtype=np.str_
+        ),
+        "max_vmax_km_s": np.asarray(
+            metadata["max_vmax_km_s"], dtype=np.float64
+        ),
         "catalogue_repop_ids": np.asarray(
             [entry["repop_id"] for entry in entries], dtype=np.int64
         ),
@@ -530,9 +565,6 @@ def checkpoint_payload(
         "js_max_cat": np.asarray(
             [entry["js_max_cat"] for entry in entries], dtype=np.float64
         ),
-        "jsmax_n_saved": np.asarray(
-            [entry["jsmax_n_saved"] for entry in entries], dtype=np.int64
-        ),
         "j_pixel_ref": np.asarray(
             [entry["j_pixel_ref"] for entry in entries], dtype=np.float64
         ),
@@ -541,6 +573,13 @@ def checkpoint_payload(
         ),
         "n_valid_rows": np.asarray(
             [entry["n_valid_rows"] for entry in entries], dtype=np.int64
+        ),
+        "n_physical_valid_rows": np.asarray(
+            [entry["n_physical_valid_rows"] for entry in entries],
+            dtype=np.int64,
+        ),
+        "n_vmax_excluded": np.asarray(
+            [entry["n_vmax_excluded"] for entry in entries], dtype=np.int64
         ),
         "n_invalid_input_rows": np.asarray(
             [entry["n_invalid_input_rows"] for entry in entries],
@@ -599,15 +638,17 @@ def load_checkpoint(
             "requested_repop_ids",
             "requested_scenarios",
             "input_root",
-            "jsmax_csv",
+            "population_selection",
+            "max_vmax_km_s",
             "catalogue_repop_ids",
             "catalogue_scenarios",
             "source_h5",
             "js_max_cat",
-            "jsmax_n_saved",
             "j_pixel_ref",
             "n_input_rows",
             "n_valid_rows",
+            "n_physical_valid_rows",
+            "n_vmax_excluded",
             "n_invalid_input_rows",
         }
         for population in POPULATIONS:
@@ -638,7 +679,16 @@ def load_checkpoint(
             and tuple(str(value) for value in data["requested_scenarios"])
             == metadata["requested_scenarios"]
             and str(data["input_root"]) == metadata["input_root"]
-            and str(data["jsmax_csv"]) == metadata["jsmax_csv"]
+            and str(data["population_selection"])
+            == metadata["population_selection"]
+            and (
+                (
+                    np.isnan(float(data["max_vmax_km_s"]))
+                    and np.isnan(metadata["max_vmax_km_s"])
+                )
+                or float(data["max_vmax_km_s"])
+                == metadata["max_vmax_km_s"]
+            )
         )
         if not compatibility:
             raise ValueError(
@@ -669,10 +719,13 @@ def load_checkpoint(
                 "scenario": str(scenarios[index]),
                 "source_h5": str(data["source_h5"][index]),
                 "js_max_cat": float(data["js_max_cat"][index]),
-                "jsmax_n_saved": int(data["jsmax_n_saved"][index]),
                 "j_pixel_ref": float(data["j_pixel_ref"][index]),
                 "n_input_rows": int(data["n_input_rows"][index]),
                 "n_valid_rows": int(data["n_valid_rows"][index]),
+                "n_physical_valid_rows": int(
+                    data["n_physical_valid_rows"][index]
+                ),
+                "n_vmax_excluded": int(data["n_vmax_excluded"][index]),
                 "n_invalid_input_rows": int(
                     data["n_invalid_input_rows"][index]
                 ),
@@ -700,7 +753,6 @@ def load_checkpoint(
 def run_catalogues(
     args: argparse.Namespace,
     repop_ids: np.ndarray,
-    jsmax_lookup: dict[tuple[str, int], JsMaxRecord],
     log_relative_edges: np.ndarray,
     process_catalogue_fn=None,
 ) -> list[dict[str, object]]:
@@ -722,9 +774,6 @@ def run_catalogues(
     for sequence, (scenario, repop_id) in enumerate(requested, start=1):
         key = (scenario, repop_id)
         source_h5 = catalogue_path(args.input_root, repop_id, scenario).resolve()
-        jsmax_record = jsmax_lookup[key]
-        js_max_cat = jsmax_record.js_max
-        jsmax_n_saved = jsmax_record.n_saved
 
         if key in completed:
             entry = completed[key]
@@ -732,22 +781,6 @@ def run_catalogues(
                 raise ValueError(
                     f"Checkpoint source mismatch for {key}: "
                     f"{entry['source_h5']} != {source_h5}"
-                )
-            if entry["js_max_cat"] != js_max_cat:
-                raise ValueError(
-                    f"Checkpoint Js-max mismatch for {key}: "
-                    f"{entry['js_max_cat']} != {js_max_cat}"
-                )
-            if entry["jsmax_n_saved"] != jsmax_n_saved:
-                raise ValueError(
-                    f"Checkpoint n_saved mismatch for {key}: "
-                    f"{entry['jsmax_n_saved']} != {jsmax_n_saved}"
-                )
-            if entry["n_input_rows"] != jsmax_n_saved:
-                raise ValueError(
-                    f"Checkpoint provenance mismatch for {key}: "
-                    f"CSV n_saved={jsmax_n_saved}, checkpoint HDF5 rows="
-                    f"{entry['n_input_rows']}."
                 )
             status = "checkpoint"
         else:
@@ -760,24 +793,16 @@ def run_catalogues(
             )
             result = process_catalogue_fn(
                 path=source_h5,
-                js_max_cat=js_max_cat,
-                expected_n_saved=jsmax_n_saved,
                 nside=args.nside,
                 f_value=args.f,
                 chunk_size=args.chunk_size,
                 log_relative_edges=log_relative_edges,
+                max_vmax_km_s=args.max_vmax_km_s,
             )
-            if result["n_input_rows"] != jsmax_n_saved:
-                raise ValueError(
-                    f"Js-max provenance mismatch for {key}: CSV n_saved="
-                    f"{jsmax_n_saved}, HDF5 rows={result['n_input_rows']}."
-                )
             entry = {
                 "repop_id": repop_id,
                 "scenario": scenario,
                 "source_h5": str(source_h5),
-                "js_max_cat": js_max_cat,
-                "jsmax_n_saved": jsmax_n_saved,
                 **result,
             }
             entries.append(entry)
@@ -795,11 +820,53 @@ def run_catalogues(
     return entries
 
 
+def maximum_discarded_by_scenario(
+    entries: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Return exact maxima and catalogue IDs for both plotted populations."""
+    summary = []
+    scenarios = sorted({str(entry["scenario"]) for entry in entries})
+    for scenario in scenarios:
+        scenario_entries = [
+            entry for entry in entries if entry["scenario"] == scenario
+        ]
+        for population in ("pointlike", "extended"):
+            finite = [
+                entry
+                for entry in scenario_entries
+                if np.isfinite(
+                    float(entry[f"max_j_rel_discarded_{population}"])
+                )
+            ]
+            if not finite:
+                continue
+            maximum = max(
+                finite,
+                key=lambda entry: float(
+                    entry[f"max_j_rel_discarded_{population}"]
+                ),
+            )
+            summary.append(
+                {
+                    "scenario": scenario,
+                    "population": population,
+                    "repop_id": int(maximum["repop_id"]),
+                    "max_j_rel_discarded": float(
+                        maximum[f"max_j_rel_discarded_{population}"]
+                    ),
+                    "max_js_discarded": float(
+                        maximum[f"max_js_discarded_{population}"]
+                    ),
+                    "js_max_cat": float(maximum["js_max_cat"]),
+                }
+            )
+    return summary
+
+
 def main() -> None:
     args = parse_args()
     validate_args(args)
     args.input_root = args.input_root.resolve()
-    args.jsmax_csv = args.jsmax_csv.resolve()
     args.output_npz = args.output_npz.resolve()
 
     repop_ids = np.arange(
@@ -807,12 +874,6 @@ def main() -> None:
         args.repop_start + args.n_repops,
         dtype=np.int64,
     )
-    required_keys = {
-        (scenario, int(repop_id))
-        for scenario in args.scenarios
-        for repop_id in repop_ids
-    }
-    jsmax_lookup = load_jsmax_lookup(args.jsmax_csv, required_keys)
     log_relative_edges = np.linspace(
         args.log_rel_min,
         args.log_rel_max,
@@ -823,13 +884,20 @@ def main() -> None:
     entries = run_catalogues(
         args=args,
         repop_ids=repop_ids,
-        jsmax_lookup=jsmax_lookup,
         log_relative_edges=log_relative_edges,
     )
     print(
         f"Saved {len(entries)} catalogue histogram(s): {args.output_npz}",
         flush=True,
     )
+    print("Maximum discarded Js/Js,max by scenario:", flush=True)
+    for row in maximum_discarded_by_scenario(entries):
+        print(
+            f"  {row['scenario']} {row['population']}: "
+            f"{row['max_j_rel_discarded']:.8e} "
+            f"(repop_{row['repop_id']:04d})",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

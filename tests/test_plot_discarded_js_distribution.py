@@ -183,8 +183,25 @@ def test_plot_loader_rejects_incomplete_checkpoint(tmp_path):
         payload[f"n_discarded_{population}"] = np.array([2])
     np.savez_compressed(path, **payload)
 
-    with pytest.raises(ValueError, match="incomplete"):
+    with pytest.raises(ValueError, match="missing fields"):
         plot.load_distribution(path)
+
+
+def test_maximum_discarded_summary_identifies_catalogues():
+    data = {
+        "catalogue_scenarios": np.array(
+            ["fragile", "fragile", "resilient"]
+        ),
+        "catalogue_repop_ids": np.array([0, 1, 4]),
+        "max_j_rel_discarded_pointlike": np.array([0.1, 0.3, 0.2]),
+        "max_j_rel_discarded_extended": np.array([0.4, 0.2, 0.6]),
+    }
+
+    rows = plot.maximum_discarded_by_scenario(data)
+    lookup = {(row["scenario"], row["population"]): row for row in rows}
+    assert lookup[("fragile", "pointlike")]["repop_id"] == 1
+    assert lookup[("fragile", "extended")]["repop_id"] == 0
+    assert lookup[("resilient", "extended")]["repop_id"] == 4
 
 
 def test_plot_draws_step_means_and_edge_aligned_bands(monkeypatch, tmp_path):

@@ -143,10 +143,11 @@ The generated NPZ files and figures should not be committed.
 The script `scripts/scan_discarded_js_distribution.py` reapplies the
 pointlike and extended catalogue cuts and saves one compact histogram of
 `Js / Js,max` per catalogue and population (`all`, `pointlike`, and
-`extended`). `Js,max` is looked up by the exact `(scenario, repop_id)` key
-in the CSV produced by `scan_catalogue_jsmax.py`; catalogues are never
-combined before their relative `Js` values are calculated. The selected
-row's `n_saved` must also match the HDF5 dataset row count. The default
+`extended`). `Js,max` is computed in a preliminary chunked pass from the
+production-valid population before numerical brightness cuts. With
+`--max-vmax-km-s`, the same inclusive Vmax selection is applied before
+`Js,max`, `J_pixel_ref`, morphology, and the brightness cuts. Catalogues are
+never combined before their relative `Js` values are calculated. The default
 range and resolution match the cumulative diagnostic (`-16 <= log10(j_rel)
 <= 0`, 320 bins), and underflow, overflow, invalid values, totals, maxima,
 and source provenance are stored explicitly. The NPZ is checkpointed
@@ -154,8 +155,21 @@ atomically after every catalogue and is resumed automatically.
 
     python -u diagnostics/cuts/scripts/scan_discarded_js_distribution.py \
         --input-root /path/to/Auriga_outputs_hdf5_v2 \
-        --jsmax-csv outputs/diagnostics/repop_jsmax_diagnostic_all_repopulations.csv \
         --output-npz outputs/diagnostics/cuts/discarded_js_distribution.npz
+
+For the dark-only Figure 8 population and the same 50 repopulations used by
+Figure 9:
+
+    python -u diagnostics/cuts/scripts/scan_discarded_js_distribution.py \
+        --input-root /dados5/julia/Auriga_outputs_hdf5_v2 \
+        --output-npz outputs/diagnostics/cuts/discarded_js_distribution_dark_vmax_le_8kms_0050repops.npz \
+        --repop-start 0 \
+        --n-repops 50 \
+        --scenarios fragile,resilient \
+        --nside 2048 \
+        --f 1e-3 \
+        --max-vmax-km-s 8 \
+        --chunk-size 500000
 
 The companion `scripts/plot_discarded_js_distribution.py` first sums pairs of
 adjacent 0.05-dex bins by default, producing 0.10-dex steps; this can be
@@ -178,7 +192,7 @@ Suggested figure caption: The upper panel shows the discarded pointlike
 subhalos and the lower panel shows the discarded extended subhalos. Each
 histogram is normalized separately by the total number of discarded subhalos
 in its respective population and catalogue. Solid lines show the arithmetic
-means across the 500 repopulations of each scenario. The shaded bands are
+means across the 50 repopulations of each scenario. The shaded bands are
 bin-wise 16--84 percentile intervals calculated between the repopulations;
 they are pointwise summaries and do not represent individual catalogue
 histograms.
@@ -186,7 +200,11 @@ histograms.
     python diagnostics/cuts/scripts/plot_discarded_js_distribution.py \
         --input-npz outputs/diagnostics/cuts/discarded_js_distribution.npz \
         --output-dir diagnostics/cuts/plots \
-        --population all
+        --population combined
+
+Both the scanner and plotter print the maximum discarded `Js / Js,max` for
+each scenario and for the pointlike and extended populations, including the
+repopulation ID. The exact per-catalogue maxima remain stored in the NPZ.
 
 ## Multiple-repopulation scan
 

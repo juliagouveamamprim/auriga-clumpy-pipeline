@@ -1,4 +1,3 @@
-import csv
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,75 +22,6 @@ spec = importlib.util.spec_from_file_location(
 )
 scan = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(scan)
-
-
-def write_jsmax_csv(path, rows):
-    with path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(
-            stream,
-            fieldnames=scan.JSMAX_CSV_FIELDS,
-        )
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def jsmax_row(scenario, repop_id, js_max):
-    return {
-        "scenario": scenario,
-        "repop_id": repop_id,
-        "n_saved": 10,
-        "js_max": js_max,
-    }
-
-
-def test_jsmax_lookup_matches_exact_catalogue_key(tmp_path):
-    path = tmp_path / "jsmax.csv"
-    write_jsmax_csv(
-        path,
-        [
-            jsmax_row("resilient", 1, 20.0),
-            jsmax_row("fragile", 0, 10.0),
-        ],
-    )
-
-    lookup = scan.load_jsmax_lookup(
-        path,
-        {("fragile", 0), ("resilient", 1)},
-    )
-
-    assert lookup[("fragile", 0)] == scan.JsMaxRecord(10, 10.0)
-    assert lookup[("resilient", 1)] == scan.JsMaxRecord(10, 20.0)
-
-
-def test_jsmax_lookup_rejects_missing_catalogue(tmp_path):
-    path = tmp_path / "jsmax.csv"
-    write_jsmax_csv(path, [jsmax_row("fragile", 0, 10.0)])
-
-    with pytest.raises(ValueError, match="Missing Js-max entry"):
-        scan.load_jsmax_lookup(path, {("resilient", 0)})
-
-
-def test_jsmax_lookup_rejects_duplicate_catalogue(tmp_path):
-    path = tmp_path / "jsmax.csv"
-    write_jsmax_csv(
-        path,
-        [
-            jsmax_row("fragile", 0, 10.0),
-            jsmax_row("fragile", 0, 11.0),
-        ],
-    )
-
-    with pytest.raises(ValueError, match="Duplicate Js-max entry"):
-        scan.load_jsmax_lookup(path, {("fragile", 0)})
-
-
-@pytest.mark.parametrize("js_max", ["nan", "inf", "0", "-1"])
-def test_jsmax_lookup_rejects_invalid_maximum(tmp_path, js_max):
-    path = tmp_path / "jsmax.csv"
-    write_jsmax_csv(path, [jsmax_row("fragile", 0, js_max)])
-
-    with pytest.raises(ValueError, match="Invalid js_max"):
-        scan.load_jsmax_lookup(path, {("fragile", 0)})
 
 
 def test_classification_and_discard_selection(monkeypatch):
@@ -135,6 +65,28 @@ def test_classification_and_discard_selection(monkeypatch):
     )
 
 
+def test_dark_selection_is_inclusive_and_uses_full_validity_mask():
+    columns = {
+        name: index
+        for index, name in enumerate(scan.REQUIRED_H5_COLUMNS + ("Vmax",))
+    }
+    array = np.array(
+        [
+            [10.0, 10.0, 0.5, 1.0, 1.0, 1.0, 0.0, 0.0, 8.0],
+            [20.0, 10.0, 0.5, 1.0, 1.0, 1.0, 0.0, 0.0, 8.1],
+            [30.0, np.nan, 0.5, 1.0, 1.0, 1.0, 0.0, 0.0, 7.0],
+        ]
+    )
+
+    physical_valid, selected, n_excluded = scan.eligible_mask(
+        array, columns, max_vmax_km_s=8.0
+    )
+
+    np.testing.assert_array_equal(physical_valid, [True, True, False])
+    np.testing.assert_array_equal(selected, [True, False, False])
+    assert n_excluded == 1
+
+
 def test_histogram_counts_underflow_overflow_and_invalid():
     result = scan.empty_population(n_bins=2)
     edges = np.array([-2.0, -1.0, 0.0])
@@ -162,36 +114,38 @@ def test_process_catalogue_bins_each_discarded_population(
     path = tmp_path / "catalogue.h5"
     data = np.array(
         [
-            [1.0, 10.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0],
-            [10.0, 10.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0],
-            [20.0, 10.0, 8.0, 1.0, 1.0, 1.0, 0.0, 0.0],
-            [30.0, 10.0, 8.0, 1.0, 1.0, 1.0, 0.0, 0.0],
-            [np.nan, 10.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0],
+            [1.0, 10.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 8.0],
+            [10.0, 10.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 8.0],
+            [20.0, 10.0, 8.0, 1.0, 1.0, 1.0, 0.0, 0.0, 8.0],
+            [30.0, 10.0, 8.0, 1.0, 1.0, 1.0, 0.0, 0.0, 8.1],
+            [np.nan, 10.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 7.0],
         ]
     )
     with h5py.File(path, "w") as handle:
         dataset = handle.create_dataset("iteration_0/data", data=data)
-        dataset.attrs["column_names"] = scan.REQUIRED_H5_COLUMNS
+        dataset.attrs["column_names"] = scan.REQUIRED_H5_COLUMNS + ("Vmax",)
 
+    reference_calls = []
     monkeypatch.setattr(
         scan,
         "compute_pixel_reference",
-        lambda **_kwargs: {"j_pixel_ref": 10.0},
+        lambda **kwargs: (
+            reference_calls.append(kwargs) or {"j_pixel_ref": 10.0}
+        ),
     )
     monkeypatch.setattr(
         scan,
         "clumpy_central_pixel_proxy_from_js",
-        lambda **_kwargs: np.array([2.0, 8.0]),
+        lambda js, **_kwargs: np.full(len(js), 2.0),
     )
 
     result = scan.process_catalogue(
         path=path,
-        js_max_cat=100.0,
-        expected_n_saved=5,
         nside=8,
         f_value=0.5,
         chunk_size=10,
         log_relative_edges=np.array([-3.0, -1.0, 0.0]),
+        max_vmax_km_s=8.0,
     )
 
     np.testing.assert_array_equal(result["hist_pointlike"], [1, 0])
@@ -200,37 +154,26 @@ def test_process_catalogue_bins_each_discarded_population(
     assert result["n_discarded_pointlike"] == 1
     assert result["n_discarded_extended"] == 1
     assert result["n_discarded_all"] == 2
+    assert result["js_max_cat"] == 20.0
     assert result["max_js_discarded_all"] == 20.0
-    assert result["max_j_rel_discarded_all"] == 0.2
+    assert result["max_j_rel_discarded_all"] == 1.0
     assert result["n_input_rows"] == 5
     assert result["n_invalid_input_rows"] == 1
-
-
-def test_process_catalogue_rejects_jsmax_row_count_mismatch(tmp_path):
-    path = tmp_path / "catalogue.h5"
-    data = np.ones((3, len(scan.REQUIRED_H5_COLUMNS)))
-    with h5py.File(path, "w") as handle:
-        dataset = handle.create_dataset("iteration_0/data", data=data)
-        dataset.attrs["column_names"] = scan.REQUIRED_H5_COLUMNS
-
-    with pytest.raises(ValueError, match=r"CSV n_saved=2, HDF5 rows=3"):
-        scan.process_catalogue(
-            path=path,
-            js_max_cat=100.0,
-            expected_n_saved=2,
-            nside=8,
-            f_value=1.0e-3,
-            chunk_size=2,
-            log_relative_edges=np.array([-2.0, -1.0, 0.0]),
-        )
+    assert result["n_physical_valid_rows"] == 4
+    assert result["n_valid_rows"] == 3
+    assert result["n_vmax_excluded"] == 1
+    assert reference_calls[0]["max_vmax_km_s"] == 8.0
 
 
 def synthetic_catalogue_result(n_bins):
     result = {
+        "js_max_cat": 10.0,
         "j_pixel_ref": 10.0,
         "n_input_rows": 4,
         "n_valid_rows": 4,
+        "n_physical_valid_rows": 4,
         "n_invalid_input_rows": 0,
+        "n_vmax_excluded": 0,
     }
     for population in scan.POPULATIONS:
         result[f"hist_{population}"] = np.ones(n_bins, dtype=np.int64)
@@ -245,7 +188,6 @@ def synthetic_catalogue_result(n_bins):
 
 def test_checkpoint_resume_skips_completed_catalogues(tmp_path):
     input_root = tmp_path / "inputs"
-    jsmax_csv = tmp_path / "jsmax.csv"
     output_npz = tmp_path / "checkpoint.npz"
     repop_ids = np.array([0, 1], dtype=np.int64)
     edges = np.array([-2.0, -1.0, 0.0])
@@ -257,25 +199,20 @@ def test_checkpoint_resume_skips_completed_catalogues(tmp_path):
 
     args = SimpleNamespace(
         input_root=input_root,
-        jsmax_csv=jsmax_csv,
         output_npz=output_npz,
         scenarios=("fragile",),
         nside=8,
         f=1.0e-3,
         chunk_size=2,
+        max_vmax_km_s=8.0,
     )
-    lookup = {
-        ("fragile", 0): scan.JsMaxRecord(4, 10.0),
-        ("fragile", 1): scan.JsMaxRecord(4, 20.0),
-    }
     first_calls = []
 
     def interrupted_process(**kwargs):
         first_calls.append(
             (
                 kwargs["path"].parent.name,
-                kwargs["js_max_cat"],
-                kwargs["expected_n_saved"],
+                kwargs["max_vmax_km_s"],
             )
         )
         if len(first_calls) == 2:
@@ -286,21 +223,19 @@ def test_checkpoint_resume_skips_completed_catalogues(tmp_path):
         scan.run_catalogues(
             args=args,
             repop_ids=repop_ids,
-            jsmax_lookup=lookup,
             log_relative_edges=edges,
             process_catalogue_fn=interrupted_process,
         )
 
     assert first_calls == [
-        ("repop_0000", 10.0, 4),
-        ("repop_0001", 20.0, 4),
+        ("repop_0000", 8.0),
+        ("repop_0001", 8.0),
     ]
 
     metadata = scan.checkpoint_metadata(args, repop_ids, edges)
     checkpoint_entries = scan.load_checkpoint(output_npz, metadata)
     assert len(checkpoint_entries) == 1
     assert checkpoint_entries[0]["repop_id"] == 0
-    assert checkpoint_entries[0]["jsmax_n_saved"] == 4
 
     resumed_calls = []
 
@@ -308,8 +243,7 @@ def test_checkpoint_resume_skips_completed_catalogues(tmp_path):
         resumed_calls.append(
             (
                 kwargs["path"],
-                kwargs["js_max_cat"],
-                kwargs["expected_n_saved"],
+                kwargs["max_vmax_km_s"],
             )
         )
         return synthetic_catalogue_result(n_bins=2)
@@ -317,7 +251,6 @@ def test_checkpoint_resume_skips_completed_catalogues(tmp_path):
     entries = scan.run_catalogues(
         args=args,
         repop_ids=repop_ids,
-        jsmax_lookup=lookup,
         log_relative_edges=edges,
         process_catalogue_fn=resumed_process,
     )
@@ -326,7 +259,61 @@ def test_checkpoint_resume_skips_completed_catalogues(tmp_path):
     assert resumed_calls == [
         (
             scan.catalogue_path(input_root, 1, "fragile").resolve(),
-            20.0,
-            4,
+            8.0,
         )
     ]
+
+
+def test_checkpoint_rejects_different_vmax_selection(tmp_path):
+    args = SimpleNamespace(
+        input_root=tmp_path / "inputs",
+        output_npz=tmp_path / "checkpoint.npz",
+        scenarios=("fragile",),
+        nside=8,
+        f=1.0e-3,
+        chunk_size=2,
+        max_vmax_km_s=8.0,
+    )
+    repop_ids = np.array([0], dtype=np.int64)
+    edges = np.array([-2.0, -1.0, 0.0])
+    metadata = scan.checkpoint_metadata(args, repop_ids, edges)
+    entry = {
+        "repop_id": 0,
+        "scenario": "fragile",
+        "source_h5": "catalogue.h5",
+        **synthetic_catalogue_result(2),
+    }
+    scan.save_checkpoint(args.output_npz, metadata, [entry])
+    with np.load(args.output_npz, allow_pickle=False) as saved:
+        assert str(saved["population_selection"]) == "dark_vmax_le_8kms"
+        assert float(saved["max_vmax_km_s"]) == 8.0
+
+    args.max_vmax_km_s = 7.0
+    incompatible = scan.checkpoint_metadata(args, repop_ids, edges)
+    with pytest.raises(ValueError, match="incompatible"):
+        scan.load_checkpoint(args.output_npz, incompatible)
+
+
+def test_maximum_discarded_summary_returns_repopulation_ids():
+    entries = []
+    for scenario, repop_id, pointlike, extended in (
+        ("fragile", 0, 0.1, 0.4),
+        ("fragile", 1, 0.3, 0.2),
+        ("resilient", 0, 0.5, 0.6),
+    ):
+        entry = {
+            "scenario": scenario,
+            "repop_id": repop_id,
+            "js_max_cat": 100.0,
+            "max_j_rel_discarded_pointlike": pointlike,
+            "max_js_discarded_pointlike": pointlike * 100.0,
+            "max_j_rel_discarded_extended": extended,
+            "max_js_discarded_extended": extended * 100.0,
+        }
+        entries.append(entry)
+
+    summary = scan.maximum_discarded_by_scenario(entries)
+    lookup = {(row["scenario"], row["population"]): row for row in summary}
+    assert lookup[("fragile", "pointlike")]["repop_id"] == 1
+    assert lookup[("fragile", "extended")]["repop_id"] == 0
+    assert lookup[("resilient", "pointlike")]["repop_id"] == 0
