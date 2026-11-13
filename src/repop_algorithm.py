@@ -1022,15 +1022,27 @@ class RepopAlgorithm:
     def Rmax(self, Vmax=None, Cv=None, Mass=None, Cmass=None,
              density_profile=None, unit=None):
         """
-        Calculate Rmax of a subhalo.
+        Calculate the radius of maximum circular velocity.
 
-        :param V: float or array-like [km/s]
-            Maximum circular velocity inside a subhalo.
-        :param C: float or array-like
-            Subhalo concentration.
+        The active repopulation parameter selects the Vmax/Cv or Mass/Cmass
+        branch. Missing values in that branch are loaded with get_parameter.
 
-        :return: float or array-like [kpc]
-            Rmax of the subhalo given by the inputs.
+        :param Vmax: Quantity, optional
+            Maximum circular velocity, with units convertible to km/s.
+        :param Cv: dimensionless scalar or array-like, optional
+            Velocity-based concentration, used in the Vmax branch.
+        :param Mass: Quantity, optional
+            Subhalo mass, used in the Mass branch.
+        :param Cmass: dimensionless scalar or array-like, optional
+            Mass-based concentration, used in the Mass branch.
+        :param density_profile: str or dict, optional
+            Profile used in the Mass branch; defaults to the active
+            configuration's internal_density_profile.
+        :param unit: str or Unit, optional
+            Output length unit; defaults to params_to_save['Rmax']['unit'],
+            or kpc when that setting is absent.
+        :return: Quantity
+            Scalar or array of radii in the requested length unit.
         """
         if self._param_repopulation == 'Vmax':
             if Vmax is None:
@@ -1067,16 +1079,27 @@ class RepopAlgorithm:
     def R_s(self, Mass=None, Cmass=None, Vmax=None, Cv=None,
             density_profile=None, unit=None):
         """
-        Calculate scale radius (R_s) of a subhalo following the NFW
-        analytical expression for a subhalo density profile.
+        Calculate the subhalo scale radius for the active repopulation mode.
 
-        :param V: float or array-like [km/s]
-            Maximum circular velocity inside a subhalo.
-        :param C: float or array-like
-            Subhalo concentration.
+        The Vmax branch divides Rmax by the profile's Rmax/R_s ratio. The
+        Mass branch divides the overdensity radius by Cmass. Missing values
+        in the selected branch are loaded with get_parameter.
 
-        :return: float or array-like [kpc]
-            R_s of the subhalo given by the inputs.
+        :param Mass: Quantity, optional
+            Subhalo mass, used in the Mass branch.
+        :param Cmass: dimensionless scalar or array-like, optional
+            Mass-based concentration, used in the Mass branch.
+        :param Vmax: Quantity, optional
+            Maximum circular velocity, with units convertible to km/s.
+        :param Cv: dimensionless scalar or array-like, optional
+            Velocity-based concentration, used in the Vmax branch.
+        :param density_profile: str or dict, optional
+            Profile used in the Vmax branch; defaults to the host profile.
+        :param unit: str or Unit, optional
+            Output length unit; defaults to params_to_save['R_s']['unit'],
+            or kpc when that setting is absent.
+        :return: Quantity
+            Scalar or array of scale radii in the requested length unit.
         """
         if self._param_repopulation == 'Vmax':
             if Vmax is None:
@@ -1115,21 +1138,29 @@ class RepopAlgorithm:
     def R_t(self, Mass=None, Vmax=None, Cv=None, D_GC=None,
             density_profile_sub=None, unit=None):
         """
-        Calculation of tidal radius (R_t) of a subhalo, following the
-        NFW analytical expression for a subhalo density profile.
+        Calculate R_t = D_GC * (Mass / (3 * M_host(<D_GC)))**(1/3).
 
-        Definition of R_t: 1603.04057 King radius pg 14
+        The host's configured density profile determines its enclosed mass.
+        In the Vmax branch, the configured relation_Mass_Vmax determines
+        the subhalo mass, replacing any supplied Mass value.
 
-        :param V: float or array-like [km/s]
-            Maximum circular velocity inside a subhalo.
-        :param C: float or array-like
-            Subhalo concentration.
-        :param D_GC: float or array-like [kpc]
-            Distance from the center of the subhalo to the
-            Galactic Center (GC).
-
-        :return: float or array-like [kpc]
-            Tidal radius of the subhalo given by the inputs.
+        :param Mass: Quantity, optional
+            Subhalo mass for the Mass branch; defaults to get_parameter.
+        :param Vmax: Quantity, optional
+            Maximum circular velocity for the Vmax branch; defaults to
+            get_parameter, with units convertible to km/s.
+        :param Cv: dimensionless scalar or array-like, optional
+            Velocity-based concentration; defaults to get_parameter.
+        :param D_GC: Quantity, optional
+            Distance to the Galactic Center; defaults to get_parameter.
+        :param density_profile_sub: str or dict, optional
+            Subhalo profile for the Vmax-to-mass conversion; defaults to
+            the active configuration's internal_density_profile.
+        :param unit: str or Unit, optional
+            Output length unit; defaults to params_to_save['R_t']['unit'],
+            or kpc when that setting is absent.
+        :return: Quantity
+            Scalar or array of tidal radii in the requested length unit.
         """
         if D_GC is None:
             D_GC = self.get_parameter('D_GC')
@@ -1192,14 +1223,22 @@ class RepopAlgorithm:
     def M_encapsulated(self, radius, rho_0, r_s,
                        density_profile, unit=None):
         """
-        Mass encapsulated up to a certain radius.
-        We assume a known density profile for the (sub)halo.
+        Calculate enclosed mass as 4*pi*rho_0*r_s**3 * ff(radius/r_s).
 
-        :param R: float or array-like [kpc]
-            Radius up to which we integrate the density profile.
-
-        :return: float or array-like [Msun]
-            Host mass encapsulated up to R.
+        :param radius: Quantity
+            Radius up to which the density profile is integrated.
+        :param rho_0: Quantity
+            Profile normalization with mass-density units.
+        :param r_s: Quantity
+            Profile scale radius, with length units compatible with radius.
+        :param density_profile: str or dict
+            Density profile passed to ff; None selects the active
+            configuration's internal_density_profile.
+        :param unit: str or Unit, optional
+            Output mass unit; defaults to
+            params_to_save['M_encapsulated']['unit'], or Msun if absent.
+        :return: Quantity
+            Scalar or array of enclosed masses in the requested mass unit.
         """
         # if radius is None:
         #     radius = self.get_parameter('D_GC')
@@ -1220,17 +1259,19 @@ class RepopAlgorithm:
 
     def C200_from_Cv(self, Cv=None, density_profile=None):
         """
-        Formula to find c200 knowing Cv to input in the Newton
-        root-finding method.
+        Infer mass-based concentration from velocity-based concentration.
 
-        :param c200: float or array-like
-            c200 of subhalo (concentration definition)
-        :param Cv: float or array-like
-            Cv of subhalo (concentration definition)
+        Solve the concentration relation with Newton's method, falling back
+        to log-space interpolation if the initial solve fails. The relation
+        uses the configured delta_overdensity, despite the C200 name.
 
-        :return: float or array-like
-            The output will be 0 when you find the c200 for a
-            specific Cv.
+        :param Cv: dimensionless scalar or array-like, optional
+            Velocity-based concentration; defaults to get_parameter('Cv').
+        :param density_profile: str or dict, optional
+            Profile used by ff and RmaxoverrS; defaults to the active
+            configuration's internal_density_profile.
+        :return: Quantity
+            Inferred concentration as a dimensionless scalar or array.
         """
         if Cv is None:
             Cv = self.get_parameter('Cv')
@@ -1282,17 +1323,32 @@ class RepopAlgorithm:
                        density_profile=None,
                        unit=None, method=None):
         """
-        Mass from a subhalo assuming a NFW profile.
-        Theoretical steps in Moline16.
+        Calculate subhalo mass using a profile or a configured formula.
 
-        :param Vmax: float or array-like [km/s]
-            Maximum radial velocity of a bound particle in the subhalo.
-        :param Rmax: float or array-like [kpc]
-            Radius at which Vmax happens (from the subhalo center).
-        :param c200: float or array-like
-            Concentration of the subhalo in terms of mass.
-        :return: float or array-like [Msun]
-            Mass from the subhalo assuming a NFW profile.
+        The 'M200_from_VmaxRmax' method integrates the profile up to
+        radius_normalized. Other methods evaluate a formula using Vmax in
+        its configured units; numeric formula results acquire the output
+        mass unit before conversion.
+
+        :param radius_normalized: dimensionless scalar or array-like, optional
+            Integration radius divided by r_s. Must be supplied for
+            'M200_from_VmaxRmax'; unused by formula-based methods.
+        :param Vmax: Quantity, optional
+            Maximum circular velocity; defaults to get_parameter('Vmax').
+        :param Rmax: Quantity, optional
+            Radius of maximum circular velocity for 'M200_from_VmaxRmax';
+            defaults to get_parameter('Rmax').
+        :param density_profile: str or dict, optional
+            Profile for 'M200_from_VmaxRmax'; defaults to the active
+            configuration's internal_density_profile.
+        :param unit: str or Unit, optional
+            Output mass unit; defaults to
+            params_to_save['mass_from_Vmax']['unit'], or Msun if absent.
+        :param method: str or dict, optional
+            'M200_from_VmaxRmax' or a mapping with 'formula' and optional
+            'params'; defaults to the configured relation_Mass_Vmax.
+        :return: Quantity
+            Scalar or array of masses in the requested mass unit.
         """
         if method is None:
             method = self.input_dict['configurations'][
@@ -1442,20 +1498,44 @@ class RepopAlgorithm:
             rho_0=None, r_s=None
     ):
         """
-        J-factor enclosing whole subhalo as a function of the
-        subhalo Vmax.
+        Calculate the J-factor within the selected integration radius.
 
-        :param V: float or array-like  [km/s]
-            Maximum circular velocity inside a subhalo.
-        :param D_Earth: float or array-like [kpc]
-            Distance between the subhalo and the Earth.
-        :param C: float or array-like
-            Subhalo concentration.
-        :param unit: str
-            Change the output units of the Jfactors.
+        Evaluate the profile's density-squared volume integral divided by
+        D_Earth**2. Missing physical inputs for the selected calculation
+        mode are loaded with get_parameter.
 
-        :return: float or array-like
-            Jfactor of a whole subhalo.
+        :param D_Earth: Quantity, optional
+            Distance between the subhalo and the observer.
+        :param density_profile: str or dict, optional
+            Profile used by ff, fff and RmaxoverrS; defaults to the active
+            configuration's internal_density_profile.
+        :param calculate_from: str, optional
+            'Vmax_Cv', 'mass_Cmass' or 'rho0_rS'; defaults to
+            self._calculate_from. The first two modes also update the
+            active repopulation parameter to Vmax or Mass, respectively.
+        :param integrate_up_to: str or float, optional
+            'R_s' integrates to one scale radius, 'R_t' to the tidal radius,
+            and 'whole' to 1000 scale radii. A float is an angle in degrees,
+            converted to a radius using D_Earth*tan(angle). Defaults to
+            the current saved parameter's integrate_up_to setting.
+        :param unit: str or Unit, optional
+            Output J-factor unit; defaults to the current saved parameter's
+            unit, or GeV2 cm-5 when that setting is unavailable.
+        :param Vmax: Quantity, optional
+            Maximum circular velocity for 'Vmax_Cv'.
+        :param Cv: dimensionless scalar or array-like, optional
+            Velocity-based concentration for 'Vmax_Cv'.
+        :param Mass: Quantity, optional
+            Subhalo mass for 'mass_Cmass'.
+        :param Cmass: dimensionless scalar or array-like, optional
+            Mass-based concentration for 'mass_Cmass'.
+        :param rho_0: Quantity, optional
+            Profile mass-density normalization for 'rho0_rS'.
+        :param r_s: Quantity, optional
+            Profile scale radius for 'rho0_rS'.
+        :return: Quantity
+            Scalar or array of integrated J-factors in the requested unit,
+            converted using the mass-energy equivalencies.
         """
         if calculate_from is None:
             calculate_from = self._calculate_from
@@ -1807,15 +1887,20 @@ class RepopAlgorithm:
     # ----------- SHVF -------------------------------------------------
     def power_law(self, Vmax, V0, slope):
         """
-        SubHalo Velocity Function (SHVF) - number of subhalos as a
-        function of Vmax. Power law formula.
-        Definition taken from Grand 2012.07846.
+        Evaluate the differential velocity function 10**V0 * Vmax**slope.
 
-        :param Vmax_array: float or array-like [km/s]
-            Maximum radial velocity of a bound particle in the subhalo.
+        number_subhalos integrates this function over a velocity interval
+        to obtain a count.
 
+        :param Vmax: float or array-like
+            Maximum circular velocity, supplied numerically in km/s by
+            the repopulation sampler and count integrator.
+        :param V0: float
+            Base-10 logarithm of the power-law normalization.
+        :param slope: float
+            Power-law exponent.
         :return: float or array-like
-            Number of subhalos defined by the Vmax input.
+            Differential abundance dN/dVmax at the supplied velocities.
         """
         return 10 ** V0 * Vmax ** slope
 
