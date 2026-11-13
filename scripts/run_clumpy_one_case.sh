@@ -24,10 +24,6 @@ set -euo pipefail
 #   5. generate corrected CLUMPY params
 #   6. run CLUMPY corrected
 #   7. combine corrected CLUMPY and pointlike FITS
-#
-# Not included:
-#   - diagnostics/diagnostic_Jfac.py
-#   - plot_extended.py
 # ============================================================
 
 if [ "$#" -lt 2 ] || [ "$#" -gt 5 ]; then
