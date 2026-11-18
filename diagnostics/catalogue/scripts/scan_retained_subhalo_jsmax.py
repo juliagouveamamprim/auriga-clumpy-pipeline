@@ -20,6 +20,7 @@ import gzip
 import hashlib
 import io
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -45,7 +46,7 @@ SCENARIOS = ("fragile", "resilient")
 DEFAULT_NSIDE = 2048
 DEFAULT_CHUNK_SIZE = 500_000
 PROGRESS_INTERVAL_ROWS = 10_000_000
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 REQUIRED_COLUMNS = (
     "Js",
     "D_Earth",
@@ -81,6 +82,9 @@ OUTPUT_COLUMNS = (
     "diagnostic_git_commit",
     "diagnostic_script_sha256",
     "nside",
+    "physical_vmax_cut_applied",
+    "physical_vmax_max_kms",
+    "population_selection",
     "theta_cut_deg",
     "pointlike_j_cut",
     "pointlike_cut_fraction",
@@ -148,12 +152,26 @@ class PointlikeMetadata:
     j_pixel_ref: float
     extended_cut_fraction: float | None
     extended_j_cut: float | None
+    physical_selection: PhysicalSelection
+
+
+@dataclass(frozen=True)
+class PhysicalSelection:
+    applied: bool
+    max_vmax_kms: float | None
+    declared: bool
 
 
 @dataclass(frozen=True)
 class ListRow:
     name: str
     halo_type: str
+
+
+@dataclass(frozen=True)
+class CorrectedList:
+    rows: tuple[ListRow, ...]
+    physical_selection: PhysicalSelection
 
 
 @dataclass(frozen=True)
@@ -237,6 +255,85 @@ def _finite_header_float(header: fits.Header, key: str, label: str) -> float:
     return value
 
 
+def _load_fits_physical_selection(
+    first: fits.Header,
+    second: fits.Header,
+    path: Path,
+) -> PhysicalSelection:
+    for key in ("VMAXCUT", "VMAXMAX"):
+        if first.get(key) != second.get(key):
+            raise DiagnosticError(
+                f"{path}: pointlike metadata {key} differs between map HDUs"
+            )
+
+    vmax_cut = first.get("VMAXCUT")
+    has_vmax_max = "VMAXMAX" in first
+    if vmax_cut is None:
+        if has_vmax_max:
+            raise DiagnosticError(
+                f"{path}: legacy pointlike FITS has VMAXMAX without VMAXCUT"
+            )
+        return PhysicalSelection(False, None, False)
+    if not isinstance(vmax_cut, (bool, np.bool_)):
+        raise DiagnosticError(f"{path}: FITS keyword VMAXCUT must be boolean")
+    if not bool(vmax_cut):
+        if has_vmax_max:
+            raise DiagnosticError(
+                f"{path}: full-population pointlike FITS has unexpected VMAXMAX"
+            )
+        return PhysicalSelection(False, None, True)
+    if not has_vmax_max:
+        raise DiagnosticError(
+            f"{path}: selected pointlike FITS is missing VMAXMAX"
+        )
+    maximum = _finite_header_float(first, "VMAXMAX", str(path))
+    if maximum <= 0.0:
+        raise DiagnosticError(f"{path}: FITS keyword VMAXMAX must be positive")
+    return PhysicalSelection(True, maximum, True)
+
+
+def _population_selection(selection: PhysicalSelection) -> str:
+    if not selection.applied:
+        return "full"
+    assert selection.max_vmax_kms is not None
+    value = np.format_float_positional(selection.max_vmax_kms, trim="-").replace(
+        ".", "p"
+    )
+    return f"dark_vmax_le_{value}kms"
+
+
+def reconcile_physical_selection(
+    fits_selection: PhysicalSelection,
+    list_selection: PhysicalSelection,
+) -> PhysicalSelection:
+    if fits_selection.declared != list_selection.declared:
+        raise DiagnosticError(
+            "asymmetric physical Vmax-selection metadata between pointlike "
+            "FITS and corrected external-halo list"
+        )
+    if fits_selection.applied != list_selection.applied:
+        raise DiagnosticError(
+            "physical Vmax-selection state disagrees between pointlike FITS "
+            "and corrected external-halo list"
+        )
+    if fits_selection.applied:
+        assert fits_selection.max_vmax_kms is not None
+        assert list_selection.max_vmax_kms is not None
+        if not np.isclose(
+            fits_selection.max_vmax_kms,
+            list_selection.max_vmax_kms,
+            rtol=1e-12,
+            atol=0.0,
+        ):
+            raise DiagnosticError(
+                "physical Vmax ceiling disagrees between pointlike FITS and "
+                "corrected external-halo list: "
+                f"FITS={fits_selection.max_vmax_kms:.17g}, "
+                f"list={list_selection.max_vmax_kms:.17g} km/s"
+            )
+    return fits_selection
+
+
 def load_pointlike_metadata(
     path: Path,
     scenario: str,
@@ -305,6 +402,7 @@ def load_pointlike_metadata(
             if fext is not None:
                 extended_fraction = _finite_header_float(first, "FEXT", str(path))
                 extended_cut = _finite_header_float(first, "JCEXT", str(path))
+            physical_selection = _load_fits_physical_selection(first, second, path)
 
     except OSError as error:
         raise DiagnosticError(f"could not open pointlike FITS {path}: {error}") from error
@@ -318,6 +416,7 @@ def load_pointlike_metadata(
         j_pixel_ref=j_pixel_ref,
         extended_cut_fraction=extended_fraction,
         extended_j_cut=extended_cut,
+        physical_selection=physical_selection,
     )
 
 
@@ -327,10 +426,11 @@ def load_corrected_list(
     repop_id: int,
     nside: int,
     catalog_path: Path,
-) -> list[ListRow]:
+) -> CorrectedList:
     _require_nonempty_file(path, "corrected external-halo list")
     rows: list[ListRow] = []
     metadata: dict[str, str] = {}
+    physical_selection: PhysicalSelection | None = None
     prefixes = {
         "Scenario:": "scenario",
         "REPOP_ID:": "repop_id",
@@ -345,6 +445,43 @@ def load_corrected_list(
                 continue
             if stripped.startswith("#"):
                 header_text = stripped[1:].strip()
+                selection_prefix = "Physical Vmax selection:"
+                if header_text.startswith(selection_prefix):
+                    declaration = header_text[len(selection_prefix):].strip()
+                    if declaration == "disabled (full population)":
+                        parsed_selection = PhysicalSelection(False, None, True)
+                    else:
+                        match = re.fullmatch(
+                            r"Vmax <= (\S+) km/s",
+                            declaration,
+                        )
+                        if match is None:
+                            raise DiagnosticError(
+                                f"malformed physical Vmax-selection metadata in "
+                                f"{path}:{line_number}"
+                            )
+                        try:
+                            maximum = float(match.group(1))
+                        except ValueError as error:
+                            raise DiagnosticError(
+                                f"invalid physical Vmax ceiling in {path}:"
+                                f"{line_number}"
+                            ) from error
+                        if not np.isfinite(maximum) or maximum <= 0.0:
+                            raise DiagnosticError(
+                                f"physical Vmax ceiling must be finite and positive "
+                                f"in {path}:{line_number}"
+                            )
+                        parsed_selection = PhysicalSelection(True, maximum, True)
+                    if (
+                        physical_selection is not None
+                        and physical_selection != parsed_selection
+                    ):
+                        raise DiagnosticError(
+                            f"conflicting physical Vmax-selection metadata in {path}"
+                        )
+                    physical_selection = parsed_selection
+                    continue
                 for prefix, key in prefixes.items():
                     if not header_text.startswith(prefix):
                         continue
@@ -400,7 +537,9 @@ def load_corrected_list(
                     f"corrected-list source repopulation mismatch in {path}: "
                     f"expected {expected_parent!r}, found {source_path.parent.name!r}"
                 )
-    return rows
+    if physical_selection is None:
+        physical_selection = PhysicalSelection(False, None, False)
+    return CorrectedList(tuple(rows), physical_selection)
 
 
 def validate_corrected_rendered_log(path: Path, list_rows: Sequence[ListRow]) -> None:
@@ -571,8 +710,20 @@ def scan_catalog(
                     y_e=y_e,
                     z_e=z_e,
                 )
+                eligible = valid
+                if metadata.physical_selection.applied:
+                    maximum = metadata.physical_selection.max_vmax_kms
+                    assert maximum is not None
+                    bad_vmax = valid & (~np.isfinite(vmax) | (vmax <= 0.0))
+                    if np.any(bad_vmax):
+                        row = start + int(np.flatnonzero(bad_vmax)[0])
+                        raise DiagnosticError(
+                            "invalid Vmax for otherwise-valid halo at catalogue "
+                            f"row {row} in {catalog_path}"
+                        )
+                    eligible = valid & (vmax <= maximum)
                 pointlike = (
-                    valid
+                    eligible
                     & (theta_s < metadata.theta_cut_deg)
                     & (js >= metadata.j_cut)
                 )
@@ -613,6 +764,21 @@ def scan_catalog(
                             raise DiagnosticError(
                                 f"extended halo {name!r} has invalid properties"
                             )
+                        if metadata.physical_selection.applied:
+                            maximum = metadata.physical_selection.max_vmax_kms
+                            assert maximum is not None
+                            if (
+                                not np.isfinite(vmax[local_index])
+                                or vmax[local_index] <= 0.0
+                            ):
+                                raise DiagnosticError(
+                                    f"extended halo {name!r} has invalid Vmax"
+                                )
+                            if vmax[local_index] > maximum:
+                                raise DiagnosticError(
+                                    f"extended halo {name!r} violates physical "
+                                    f"Vmax <= {maximum:.17g} km/s selection"
+                                )
 
                     row_index = start + local_index
                     retained_row = {
@@ -732,6 +898,17 @@ def build_output_row(
         "diagnostic_git_commit": diagnostic_git_commit,
         "diagnostic_script_sha256": _script_sha256(),
         "nside": metadata.nside,
+        "physical_vmax_cut_applied": str(
+            metadata.physical_selection.applied
+        ).lower(),
+        "physical_vmax_max_kms": (
+            ""
+            if metadata.physical_selection.max_vmax_kms is None
+            else format(metadata.physical_selection.max_vmax_kms, ".17g")
+        ),
+        "population_selection": _population_selection(
+            metadata.physical_selection
+        ),
         "theta_cut_deg": format(metadata.theta_cut_deg, ".17g"),
         "pointlike_j_cut": format(metadata.j_cut, ".17g"),
         "pointlike_cut_fraction": format(metadata.cut_fraction, ".17g"),
@@ -807,6 +984,7 @@ def validate_existing_output(
     repop_id: int,
     nside: int,
     production_git_commit: str,
+    metadata: PointlikeMetadata,
 ) -> dict[str, str]:
     _require_nonempty_file(path, "existing case CSV")
     with path.open(newline="", encoding="utf-8") as stream:
@@ -822,6 +1000,17 @@ def validate_existing_output(
         "scenario": scenario,
         "repop_id": str(repop_id),
         "nside": str(nside),
+        "physical_vmax_cut_applied": str(
+            metadata.physical_selection.applied
+        ).lower(),
+        "physical_vmax_max_kms": (
+            ""
+            if metadata.physical_selection.max_vmax_kms is None
+            else format(metadata.physical_selection.max_vmax_kms, ".17g")
+        ),
+        "population_selection": _population_selection(
+            metadata.physical_selection
+        ),
         "production_git_commit": production_git_commit,
         "catalog_path": str(paths.catalog.resolve()),
         "retained_catalog_path": str(paths.retained_catalog.resolve()),
@@ -949,6 +1138,36 @@ def process_case(
     overwrite: bool = False,
 ) -> str:
     print(f"starting: {scenario} repop_{repop_id:04d}", flush=True)
+    metadata = load_pointlike_metadata(
+        paths.pointlike_fits, scenario, repop_id, nside
+    )
+    corrected_list = load_corrected_list(
+        paths.corrected_list,
+        scenario=scenario,
+        repop_id=repop_id,
+        nside=nside,
+        catalog_path=paths.catalog,
+    )
+    physical_selection = reconcile_physical_selection(
+        metadata.physical_selection,
+        corrected_list.physical_selection,
+    )
+    if metadata.physical_selection != physical_selection:
+        raise AssertionError("reconciled physical selection differs from FITS metadata")
+    population_selection = _population_selection(physical_selection)
+    if physical_selection.applied:
+        for output_path in (paths.output_csv, paths.retained_catalog):
+            if population_selection not in output_path.parent.parts:
+                raise DiagnosticError(
+                    "selected-population diagnostic output directory must "
+                    f"contain the population tag {population_selection!r}: "
+                    f"{output_path.parent}"
+                )
+    validate_corrected_rendered_log(
+        paths.corrected_rendered_log,
+        corrected_list.rows,
+    )
+
     summary_exists = paths.output_csv.exists()
     retained_exists = paths.retained_catalog.exists()
     if summary_exists and retained_exists and not overwrite:
@@ -959,21 +1178,12 @@ def process_case(
             repop_id,
             nside,
             production_git_commit,
+            metadata,
         )
         validate_retained_catalog(paths.retained_catalog, summary)
         return "skipped"
 
-    metadata = load_pointlike_metadata(
-        paths.pointlike_fits, scenario, repop_id, nside
-    )
-    extended_rows = load_corrected_list(
-        paths.corrected_list,
-        scenario=scenario,
-        repop_id=repop_id,
-        nside=nside,
-        catalog_path=paths.catalog,
-    )
-    validate_corrected_rendered_log(paths.corrected_rendered_log, extended_rows)
+    extended_rows = corrected_list.rows
     paths.retained_catalog.parent.mkdir(parents=True, exist_ok=True)
     file_descriptor, temporary_name = tempfile.mkstemp(
         dir=paths.retained_catalog.parent,
@@ -1056,6 +1266,25 @@ def merge_case_outputs(paths: Sequence[Path], output: Path) -> None:
     identities = [(row["scenario"], row["repop_id"]) for row in rows]
     if len(identities) != len(set(identities)):
         raise DiagnosticError("duplicate scenario/repopulation rows selected for merge")
+    population_configs = {
+        (
+            row["physical_vmax_cut_applied"],
+            row["physical_vmax_max_kms"],
+            row["population_selection"],
+        )
+        for row in rows
+    }
+    if len(population_configs) > 1:
+        raise DiagnosticError(
+            "cannot merge case CSVs with mixed physical population selections"
+        )
+    if rows and rows[0]["physical_vmax_cut_applied"] == "true":
+        population_selection = rows[0]["population_selection"]
+        if population_selection not in output.parent.parts:
+            raise DiagnosticError(
+                "selected-population merged output directory must contain "
+                f"the population tag {population_selection!r}: {output.parent}"
+            )
     _atomic_write_rows(output, rows)
 
 
