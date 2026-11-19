@@ -48,6 +48,22 @@ iteration_0/data
 iteration_0/halo_name
 ```
 
+The `halo_name` identifiers use the legacy `hydro_res_` prefix in **both**
+`hydro_resilient` and `hydro_fragile` catalogues. This prefix is a shared naming
+convention, not a scenario label. The scenario is identified by the catalogue
+filename and the scenario selected by the pipeline.
+
+Names are assigned after filtering, in the saved row order: row zero is
+`hydro_res_00001`. The positive numeric suffix is the row index plus one,
+zero-padded to at least five digits. Names are local to each iteration's table;
+the same name in another scenario or repopulation does not identify the same
+physical object.
+
+This convention is retained for compatibility: the density-correction and
+diagnostic readers validate the prefix and use the suffix to locate HDF5 rows.
+Renaming it by scenario would break those readers and compatibility with
+existing catalogues and CLUMPY lists.
+
 ### Reduced catalog schema
 
 The current HDF5 table contains ten columns:
