@@ -108,6 +108,28 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="roi_04",
         help="ROI used in the resilient panel (default: roi_04).",
     )
+    parser.add_argument(
+        "--fragile-roi-center",
+        nargs=2,
+        type=float,
+        metavar=("L_DEG", "B_DEG"),
+        default=None,
+        help=(
+            "Custom Galactic (l, b) center in degrees for the fragile panels; "
+            "overrides --fragile-roi."
+        ),
+    )
+    parser.add_argument(
+        "--resilient-roi-center",
+        nargs=2,
+        type=float,
+        metavar=("L_DEG", "B_DEG"),
+        default=None,
+        help=(
+            "Custom Galactic (l, b) center in degrees for the resilient panels; "
+            "overrides --resilient-roi."
+        ),
+    )
     parser.add_argument("--roi-width-deg", type=float, default=DEFAULT_ROI_WIDTH_DEG)
     parser.add_argument("--roi-height-deg", type=float, default=DEFAULT_ROI_HEIGHT_DEG)
     parser.add_argument("--cmap", default=DEFAULT_CMAP)
@@ -139,6 +161,19 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("PDF export requires --dpi >= 400.")
     if args.cmap not in matplotlib.colormaps:
         raise ValueError(f"Unknown Matplotlib colormap: {args.cmap!r}.")
+    for scenario in SCENARIOS:
+        center = getattr(args, f"{scenario}_roi_center")
+        if center is None:
+            continue
+        longitude_deg, latitude_deg = center
+        if not math.isfinite(longitude_deg) or not 0.0 <= longitude_deg < 360.0:
+            raise ValueError(
+                f"--{scenario}-roi-center L_DEG must lie in [0, 360)."
+            )
+        if not math.isfinite(latitude_deg) or not -90.0 <= latitude_deg <= 90.0:
+            raise ValueError(
+                f"--{scenario}-roi-center B_DEG must lie in [-90, 90]."
+            )
     if args.basename is not None:
         basename = str(args.basename).strip()
         if not basename or Path(basename).name != basename:
@@ -181,10 +216,35 @@ def output_directory(args: argparse.Namespace) -> Path:
 def output_basename(args: argparse.Namespace) -> str:
     if args.basename is not None:
         return str(args.basename).strip()
+    fragile_roi_id, _ = selected_roi(args, "fragile")
+    resilient_roi_id, _ = selected_roi(args, "resilient")
     return (
-        f"subhalo_total_fragile_{args.fragile_roi}_resilient_{args.resilient_roi}"
+        f"subhalo_total_fragile_{fragile_roi_id}_resilient_{resilient_roi_id}"
         f"_nside{args.nside}"
     )
+
+
+def coordinate_filename_token(value: float) -> str:
+    """Return a compact, filesystem-safe coordinate token."""
+    if value == 0.0:
+        value = 0.0
+    return f"{value:.10g}".replace("-", "m").replace(".", "p")
+
+
+def selected_roi(
+    args: argparse.Namespace,
+    scenario: str,
+) -> tuple[str, tuple[float, float] | None]:
+    """Resolve a scenario's custom-center override or predefined ROI."""
+    custom_center = getattr(args, f"{scenario}_roi_center")
+    if custom_center is None:
+        return getattr(args, f"{scenario}_roi"), None
+    longitude_deg, latitude_deg = (float(value) for value in custom_center)
+    roi_id = (
+        f"custom_l{coordinate_filename_token(longitude_deg)}"
+        f"_b{coordinate_filename_token(latitude_deg)}"
+    )
+    return roi_id, (longitude_deg, latitude_deg)
 
 
 def tangent_frame(
@@ -255,8 +315,9 @@ def make_roi_geometry(
     roi_id: str,
     width_deg: float,
     height_deg: float,
+    center: tuple[float, float] | None = None,
 ) -> RoiGeometry:
-    longitude_deg, latitude_deg = ROI_CENTERS[roi_id]
+    longitude_deg, latitude_deg = ROI_CENTERS[roi_id] if center is None else center
     frame = tangent_frame(longitude_deg, latitude_deg, width_deg, height_deg)
     pixels = hp.query_polygon(
         nside,
@@ -521,7 +582,70 @@ def scientific_tick_label(value: float, _position: int | None = None) -> str:
         return ""
     exponent = int(math.floor(math.log10(value)))
     mantissa = value / 10.0**exponent
+    if math.isclose(mantissa, 1.0, rel_tol=1.0e-12):
+        return rf"$10^{{{exponent}}}$"
     return rf"${mantissa:.3g}\times10^{{{exponent}}}$"
+
+
+def round_log_ticks(vmin: float, vmax: float, count: int = 4) -> np.ndarray:
+    """Choose well-spaced round tick positions inside a logarithmic range."""
+    if not (np.isfinite(vmin) and np.isfinite(vmax) and 0.0 < vmin < vmax):
+        raise ValueError("Logarithmic tick limits must be finite and positive.")
+    if count < 1:
+        raise ValueError("Tick count must be positive.")
+
+    minimum_exponent = int(math.floor(math.log10(vmin)))
+    maximum_exponent = int(math.floor(math.log10(vmax)))
+
+    def candidates(mantissas: np.ndarray) -> np.ndarray:
+        values = [
+            mantissa * 10.0**exponent
+            for exponent in range(minimum_exponent, maximum_exponent + 1)
+            for mantissa in mantissas
+            if vmin <= mantissa * 10.0**exponent <= vmax
+        ]
+        return np.asarray(sorted(set(values)), dtype=np.float64)
+
+    # Use the conventional 1-2-5 sequence whenever it offers enough choices.
+    choices = candidates(np.asarray([1.0, 2.0, 5.0]))
+    precision = 0
+    while choices.size < count:
+        step = 10.0**-precision
+        mantissas = np.arange(10**precision, 10 ** (precision + 1)) * step
+        choices = candidates(mantissas)
+        precision += 1
+
+    if choices.size == count:
+        return choices
+
+    targets = np.linspace(math.log10(vmin), math.log10(vmax), count)
+    log_choices = np.log10(choices)
+    # Dynamic programming selects distinct, ordered candidates closest to the
+    # logarithmically even targets.
+    costs = np.full((count + 1, choices.size + 1), np.inf)
+    take = np.zeros((count + 1, choices.size + 1), dtype=bool)
+    costs[0, :] = 0.0
+    for selected in range(1, count + 1):
+        for available in range(1, choices.size + 1):
+            skip_cost = costs[selected, available - 1]
+            take_cost = costs[selected - 1, available - 1] + (
+                log_choices[available - 1] - targets[selected - 1]
+            ) ** 2
+            if take_cost < skip_cost:
+                costs[selected, available] = take_cost
+                take[selected, available] = True
+            else:
+                costs[selected, available] = skip_cost
+
+    selected_indices = []
+    selected = count
+    available = choices.size
+    while selected:
+        if take[selected, available]:
+            selected_indices.append(available - 1)
+            selected -= 1
+        available -= 1
+    return choices[np.asarray(selected_indices[::-1])]
 
 
 def plot_style() -> dict[str, object]:
@@ -652,10 +776,9 @@ def _render_comparison(
             cax=colorbar_axis,
             orientation="horizontal",
         )
-        colorbar_ticks = np.geomspace(
+        colorbar_ticks = round_log_ticks(
             float(norms[field_name].vmin),
             float(norms[field_name].vmax),
-            num=4,
         )
         colorbar.set_ticks(colorbar_ticks)
         colorbar.ax.xaxis.set_major_formatter(FuncFormatter(scientific_tick_label))
@@ -877,15 +1000,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     selected_rois = {
-        "fragile": args.fragile_roi,
-        "resilient": args.resilient_roi,
+        scenario: selected_roi(args, scenario) for scenario in SCENARIOS
     }
     geometries = {
         scenario: make_roi_geometry(
             args.nside,
-            selected_rois[scenario],
+            selected_rois[scenario][0],
             args.roi_width_deg,
             args.roi_height_deg,
+            center=selected_rois[scenario][1],
         )
         for scenario in SCENARIOS
     }

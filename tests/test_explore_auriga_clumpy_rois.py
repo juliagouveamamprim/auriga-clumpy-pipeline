@@ -79,6 +79,8 @@ def test_defaults_are_roi_04_nside2048_viridis_and_20_by_10_degrees():
     assert args.nside == 2048
     assert args.fragile_roi == "roi_04"
     assert args.resilient_roi == "roi_04"
+    assert args.fragile_roi_center is None
+    assert args.resilient_roi_center is None
     assert args.roi_width_deg == pytest.approx(20.0)
     assert args.roi_height_deg == pytest.approx(10.0)
     assert args.cmap == "viridis"
@@ -243,6 +245,35 @@ def test_column_log_norms_use_independent_exact_positive_ranges():
         assert column["distributions"]["joint"]["count"] == positive_count
 
 
+def test_round_log_ticks_use_round_positions_across_several_orders():
+    ticks = preview.round_log_ticks(1.06e12, 8.86e16)
+
+    np.testing.assert_array_equal(ticks, [2.0e12, 5.0e13, 2.0e15, 5.0e16])
+    assert np.all((ticks >= 1.06e12) & (ticks <= 8.86e16))
+
+
+def test_round_log_ticks_use_integer_mantissas_for_narrow_range():
+    ticks = preview.round_log_ticks(2.0e14, 5.0e14)
+
+    np.testing.assert_array_equal(ticks, [2.0e14, 3.0e14, 4.0e14, 5.0e14])
+
+
+def test_round_log_ticks_refine_only_when_range_is_very_narrow():
+    ticks = preview.round_log_ticks(1.11e14, 1.19e14)
+
+    np.testing.assert_allclose(
+        ticks,
+        [1.11e14, 1.14e14, 1.16e14, 1.19e14],
+        rtol=1.0e-15,
+    )
+    assert np.all((ticks >= 1.11e14) & (ticks <= 1.19e14))
+
+
+def test_scientific_tick_label_omits_unit_mantissa_for_power_of_ten():
+    assert preview.scientific_tick_label(1.0e14) == r"$10^{14}$"
+    assert preview.scientific_tick_label(2.0e15) == r"$2\times10^{15}$"
+
+
 def test_native_pixel_boundaries_are_projected_as_four_vertex_polygons():
     geometry = preview.make_roi_geometry(16, "roi_04", 20.0, 10.0)
 
@@ -255,6 +286,50 @@ def test_native_pixel_boundaries_are_projected_as_four_vertex_polygons():
     assert polygons.shape == (geometry.intersecting_pixels.size, 4, 2)
     assert np.all(np.isfinite(polygons))
     assert geometry.n_roundtrip_mismatches == 0
+
+
+def test_custom_roi_center_uses_galactic_longitude_and_latitude():
+    args = preview.parse_args(
+        ["--fragile-roi-center", "200", "44", "--resilient-roi", "roi_04"]
+    )
+    preview.validate_args(args)
+
+    roi_id, center = preview.selected_roi(args, "fragile")
+    geometry = preview.make_roi_geometry(16, roi_id, 20.0, 10.0, center=center)
+
+    assert roi_id == "custom_l200_b44"
+    assert center == (200.0, 44.0)
+    assert geometry.frame.longitude_deg == pytest.approx(200.0)
+    assert geometry.frame.latitude_deg == pytest.approx(44.0)
+    np.testing.assert_allclose(
+        geometry.frame.center,
+        hp.ang2vec(200.0, 44.0, lonlat=True),
+        atol=1.0e-15,
+    )
+    assert preview.selected_roi(args, "resilient") == ("roi_04", None)
+    assert preview.output_basename(args) == (
+        "subhalo_total_fragile_custom_l200_b44_resilient_roi_04_nside2048"
+    )
+
+
+@pytest.mark.parametrize(
+    ("scenario", "longitude", "latitude", "message"),
+    [
+        ("fragile", "360", "44", "L_DEG"),
+        ("fragile", "nan", "44", "L_DEG"),
+        ("resilient", "200", "91", "B_DEG"),
+        ("resilient", "200", "-91", "B_DEG"),
+    ],
+)
+def test_custom_roi_center_rejects_invalid_galactic_coordinates(
+    scenario, longitude, latitude, message
+):
+    args = preview.parse_args(
+        [f"--{scenario}-roi-center", longitude, latitude]
+    )
+
+    with pytest.raises(ValueError, match=message):
+        preview.validate_args(args)
 
 
 def test_roi_01_direct_and_inverse_gnomonic_transform_roundtrip():
@@ -433,8 +508,8 @@ def test_main_renders_quantitative_subhalo_and_total_roi_04_comparison(
         assert item["vmin"] == pytest.approx(normalization["vmin"])
         assert item["vmax"] == pytest.approx(normalization["vmax"])
         assert len(item["ticks"]) == 4
-        assert item["ticks"][0] == pytest.approx(item["vmin"])
-        assert item["ticks"][-1] == pytest.approx(item["vmax"])
+        assert np.all(np.asarray(item["ticks"]) >= item["vmin"])
+        assert np.all(np.asarray(item["ticks"]) <= item["vmax"])
     assert payload["rendering"]["all_intersecting_pixels_rendered"] is True
     assert payload["rendering"]["zero_value_rendering"] == {
         "color": "#000000",
@@ -560,3 +635,45 @@ def test_scenarios_can_select_different_rois(tmp_path):
     assert payload["scenario_rois"]["resilient"]["geometry"][
         "center_longitude_deg"
     ] == pytest.approx(340.0)
+
+
+def test_main_custom_fragile_center_keeps_predefined_resilient_roi(tmp_path):
+    fragile_path = tmp_path / "fragile.fits"
+    resilient_path = tmp_path / "resilient.fits"
+    write_map(fragile_path, nside=8, scenario_scale=1.0)
+    write_map(resilient_path, nside=8, scenario_scale=2.0)
+    output_dir = tmp_path / "custom_fragile_roi"
+
+    preview.main(
+        [
+            "--nside",
+            "8",
+            "--fragile-map",
+            str(fragile_path),
+            "--resilient-map",
+            str(resilient_path),
+            "--fragile-roi-center",
+            "200",
+            "44",
+            "--resilient-roi",
+            "roi_04",
+            "--output-dir",
+            str(output_dir),
+            "--formats",
+            "png",
+            "--dpi",
+            "100",
+        ]
+    )
+
+    basename = "subhalo_total_fragile_custom_l200_b44_resilient_roi_04_nside8"
+    assert (output_dir / f"{basename}.png").is_file()
+    payload = json.loads((output_dir / f"{basename}.json").read_text())
+    fragile_geometry = payload["scenario_rois"]["fragile"]["geometry"]
+    resilient_geometry = payload["scenario_rois"]["resilient"]["geometry"]
+    assert fragile_geometry["roi_id"] == "custom_l200_b44"
+    assert fragile_geometry["center_longitude_deg"] == pytest.approx(200.0)
+    assert fragile_geometry["center_latitude_deg"] == pytest.approx(44.0)
+    assert resilient_geometry["roi_id"] == "roi_04"
+    assert resilient_geometry["center_longitude_deg"] == pytest.approx(340.0)
+    assert resilient_geometry["center_latitude_deg"] == pytest.approx(5.0)

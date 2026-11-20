@@ -219,7 +219,7 @@ def main():
         labels,
         frameon=False,
         loc="lower right",
-        fontsize=10,
+        fontsize=9,
     )
 
     figure.tight_layout()

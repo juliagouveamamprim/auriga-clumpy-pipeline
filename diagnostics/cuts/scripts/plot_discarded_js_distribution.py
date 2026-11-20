@@ -365,7 +365,7 @@ def _draw_population(
             handles=legend_handles,
             labels=legend_labels,
             ncols=1,
-            loc="upper right",
+            loc="upper left",
             fontsize=12,
             labelspacing=0.3,
             handlelength=2.0,
