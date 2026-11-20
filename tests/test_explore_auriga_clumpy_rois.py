@@ -269,6 +269,30 @@ def test_round_log_ticks_refine_only_when_range_is_very_narrow():
     assert np.all((ticks >= 1.11e14) & (ticks <= 1.19e14))
 
 
+@pytest.mark.parametrize(
+    ("field_name", "vmin", "vmax", "expected"),
+    [
+        ("J_sub", 1.06e12, 8.86e16, [2.0e12, 2.0e14, 2.0e16]),
+        ("J_tot", 2.50e14, 8.86e16, [5.0e14, 5.0e15, 5.0e16]),
+    ],
+)
+def test_colorbar_ticks_use_preferred_log_spaced_positions(
+    field_name, vmin, vmax, expected
+):
+    ticks = preview.colorbar_ticks(field_name, vmin, vmax)
+
+    np.testing.assert_array_equal(ticks, expected)
+    log_intervals = np.diff(np.log10(ticks))
+    np.testing.assert_allclose(log_intervals, log_intervals[0])
+
+
+def test_colorbar_ticks_fall_back_to_three_ticks_inside_other_roi_range():
+    ticks = preview.colorbar_ticks("J_sub", 2.0e14, 5.0e14)
+
+    np.testing.assert_array_equal(ticks, [2.0e14, 3.0e14, 5.0e14])
+    assert np.all((ticks >= 2.0e14) & (ticks <= 5.0e14))
+
+
 def test_scientific_tick_label_omits_unit_mantissa_for_power_of_ten():
     assert preview.scientific_tick_label(1.0e14) == r"$10^{14}$"
     assert preview.scientific_tick_label(2.0e15) == r"$2\times10^{15}$"
@@ -507,7 +531,7 @@ def test_main_renders_quantitative_subhalo_and_total_roi_04_comparison(
         ]
         assert item["vmin"] == pytest.approx(normalization["vmin"])
         assert item["vmax"] == pytest.approx(normalization["vmax"])
-        assert len(item["ticks"]) == 4
+        assert len(item["ticks"]) == 3
         assert np.all(np.asarray(item["ticks"]) >= item["vmin"])
         assert np.all(np.asarray(item["ticks"]) <= item["vmax"])
     assert payload["rendering"]["all_intersecting_pixels_rendered"] is True

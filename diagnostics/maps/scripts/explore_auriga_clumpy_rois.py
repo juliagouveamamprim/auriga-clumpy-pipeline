@@ -62,6 +62,10 @@ PANEL_TITLE_FONTSIZE = 19.1
 LABEL_FONTSIZE = 17.0
 TICK_FONTSIZE = 16.0
 LEGEND_FONTSIZE = 16.0
+PREFERRED_COLORBAR_TICKS = {
+    "J_sub": np.asarray([2.0e12, 2.0e14, 2.0e16]),
+    "J_tot": np.asarray([5.0e14, 5.0e15, 5.0e16]),
+}
 
 
 @dataclass(frozen=True)
@@ -648,6 +652,15 @@ def round_log_ticks(vmin: float, vmax: float, count: int = 4) -> np.ndarray:
     return choices[np.asarray(selected_indices[::-1])]
 
 
+def colorbar_ticks(field_name: str, vmin: float, vmax: float) -> np.ndarray:
+    """Use the preferred three ticks when possible, otherwise choose three."""
+    preferred = PREFERRED_COLORBAR_TICKS[field_name]
+    limits_are_valid = np.isfinite(vmin) and np.isfinite(vmax) and 0.0 < vmin < vmax
+    if limits_are_valid and np.all((preferred >= vmin) & (preferred <= vmax)):
+        return preferred.copy()
+    return round_log_ticks(vmin, vmax, count=3)
+
+
 def plot_style() -> dict[str, object]:
     """Match the typographic hierarchy of the official all-sky figures."""
     return {
@@ -776,11 +789,12 @@ def _render_comparison(
             cax=colorbar_axis,
             orientation="horizontal",
         )
-        colorbar_ticks = round_log_ticks(
+        selected_ticks = colorbar_ticks(
+            field_name,
             float(norms[field_name].vmin),
             float(norms[field_name].vmax),
         )
-        colorbar.set_ticks(colorbar_ticks)
+        colorbar.set_ticks(selected_ticks)
         colorbar.ax.xaxis.set_major_formatter(FuncFormatter(scientific_tick_label))
         colorbar.ax.xaxis.set_minor_locator(matplotlib.ticker.NullLocator())
         colorbar.ax.tick_params(labelsize=TICK_FONTSIZE, pad=4.5)
@@ -797,7 +811,7 @@ def _render_comparison(
                 "column": field_name,
                 "vmin": float(norms[field_name].vmin),
                 "vmax": float(norms[field_name].vmax),
-                "ticks": [float(value) for value in colorbar_ticks],
+                "ticks": [float(value) for value in selected_ticks],
                 "unit": "GeV2 cm-5 per native HEALPix pixel",
             }
         )
