@@ -73,9 +73,9 @@ def standard_rows():
     # Column order is deliberately not the canonical HDF5 order.
     return np.array(
         [
-            [1.0, 30.0, 1.0, 11.0],
-            [3.0, 20.0, 1.0, 22.0],
-            [2.0, 10.0, 1.0, 33.0],
+            [1.0, 30.0, 1.0, 7.0],
+            [3.0, 20.0, 1.0, 8.0],
+            [2.0, 10.0, 1.0, 6.0],
         ]
     )
 
@@ -97,24 +97,60 @@ def test_exact_luminosity_chunk_boundaries_and_distinct_maxima(tmp_path):
     assert result.max_js == 30.0
     assert float(result.max_l_subhalo) == pytest.approx(9.0 * coefficient)
     assert float(result.frac_lmax) == pytest.approx(9.0 / 14.0)
-    assert result.vmax_at_max_js == 11.0
-    assert result.vmax_at_max_l == 22.0
+    assert result.vmax_at_max_js == 7.0
+    assert result.vmax_at_max_l == 8.0
     assert host == boost.HostParameters(2.0, 3.0, 6.0, 200.0)
 
 
 def test_ties_keep_first_catalogue_occurrence_across_chunks(tmp_path):
     path = source_path(tmp_path, 0)
     rows = [
-        [2.0, 8.0, 1.0, 10.0],
-        [1.0, 2.0, 1.0, 20.0],
-        [2.0, 8.0, 1.0, 30.0],
+        [2.0, 8.0, 1.0, 5.0],
+        [1.0, 2.0, 1.0, 6.0],
+        [2.0, 8.0, 1.0, 7.0],
     ]
     write_catalogue(path, rows)
 
     result, _ = boost.scan_catalogue(path, repop_id=0, chunk_size=1)
 
-    assert result.vmax_at_max_js == 10.0
-    assert result.vmax_at_max_l == 10.0
+    assert result.vmax_at_max_js == 5.0
+    assert result.vmax_at_max_l == 5.0
+
+
+def test_dark_satellite_selection_controls_every_statistic_across_chunks(tmp_path):
+    path = source_path(tmp_path, 0)
+    rows = [
+        [100.0, 1000.0, 1.0, 9.0],
+        [200.0, 2000.0, 1.0, 10.0],  # first chunk has no candidates
+        [2.0, 30.0, 1.0, 7.0],
+        [3.0, 20.0, 1.0, 8.0],  # inclusive boundary
+        [50.0, 999.0, 1.0, 12.0],
+    ]
+    write_catalogue(path, rows)
+
+    result, host = boost.scan_catalogue(path, repop_id=0, chunk_size=2)
+    coefficient = 7.0 * math.pi / 6.0
+    denominator = boost.host_luminosity(host)
+
+    assert result.n_subhalos == 2
+    assert float(result.l_sub_total) == pytest.approx(coefficient * 13.0)
+    assert float(result.sum_js) == pytest.approx(50.0)
+    assert result.max_js == 30.0
+    assert float(result.max_l_subhalo) == pytest.approx(coefficient * 9.0)
+    assert float(result.frac_lmax) == pytest.approx(9.0 / 13.0)
+    assert result.vmax_at_max_js == 7.0
+    assert result.vmax_at_max_l == 8.0
+    assert float(result.boost_factor) == pytest.approx(
+        coefficient * 13.0 / float(denominator)
+    )
+
+
+def test_catalogue_without_dark_satellite_candidates_fails_explicitly(tmp_path):
+    path = source_path(tmp_path, 0)
+    write_catalogue(path, [[1.0, 2.0, 1.0, 8.1]])
+
+    with pytest.raises(ValueError, match="no subhalos with Vmax <= 8.0"):
+        boost.scan_catalogue(path, repop_id=0, chunk_size=1)
 
 
 def test_denominator_uses_original_embedded_host_and_ignores_renormalized_data(tmp_path):
@@ -261,8 +297,8 @@ def test_resume_has_no_duplicates_and_output_is_atomic_and_sorted(tmp_path, monk
     with output.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=boost.CSV_FIELDS)
         writer.writeheader()
-        writer.writerow(boost.result_to_row(result_2))
-        writer.writerow(boost.result_to_row(result_1))
+        writer.writerow(boost.result_to_row(result_2, "fragile"))
+        writer.writerow(boost.result_to_row(result_1, "fragile"))
 
     real_replace = boost.os.replace
     replacements = []
@@ -308,7 +344,10 @@ def test_resume_has_no_duplicates_and_output_is_atomic_and_sorted(tmp_path, monk
 
 def test_resume_rejects_duplicate_repop_ids(tmp_path):
     output = tmp_path / "boost.csv"
-    row = {name: "1" for name in boost.CSV_FIELDS}
+    path = source_path(tmp_path, 0)
+    write_catalogue(path, standard_rows())
+    result, _ = boost.scan_catalogue(path, repop_id=0, chunk_size=2)
+    row = boost.result_to_row(result, "fragile")
     with output.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=boost.CSV_FIELDS)
         writer.writeheader()
@@ -316,4 +355,48 @@ def test_resume_rejects_duplicate_repop_ids(tmp_path):
         writer.writerow(row)
 
     with pytest.raises(ValueError, match="Duplicate repop_id"):
-        boost.load_existing_rows(output)
+        boost.load_existing_rows(output, "fragile")
+
+
+def test_output_namespace_and_population_metadata_protect_resume(tmp_path):
+    assert boost.default_output_path("fragile").name == (
+        "substructure_boost_dark_vmax_le_8kms_fragile_0500.csv"
+    )
+
+    path = source_path(tmp_path, 0)
+    write_catalogue(path, standard_rows())
+    result, _ = boost.scan_catalogue(path, repop_id=0, chunk_size=2)
+    row = boost.result_to_row(result, "fragile")
+    assert row["scenario"] == "fragile"
+    assert row["population_selection"] == "dark_vmax_le_8kms"
+    assert float(row["max_vmax_km_s"]) == 8.0
+
+    mixed_output = tmp_path / "mixed.csv"
+    mixed_row = dict(row, max_vmax_km_s="7")
+    with mixed_output.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=boost.CSV_FIELDS)
+        writer.writeheader()
+        writer.writerow(mixed_row)
+    with pytest.raises(ValueError, match="Population selection mismatch"):
+        boost.load_existing_rows(mixed_output, "fragile")
+
+    scenario_output = tmp_path / "wrong_scenario.csv"
+    with scenario_output.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=boost.CSV_FIELDS)
+        writer.writeheader()
+        writer.writerow(row)
+    with pytest.raises(ValueError, match="Scenario mismatch"):
+        boost.load_existing_rows(scenario_output, "resilient")
+
+    historical_output = tmp_path / "historical.csv"
+    historical_fields = tuple(
+        name
+        for name in boost.CSV_FIELDS
+        if name not in {"scenario", "population_selection", "max_vmax_km_s"}
+    )
+    with historical_output.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=historical_fields)
+        writer.writeheader()
+        writer.writerow({name: row[name] for name in historical_fields})
+    with pytest.raises(ValueError, match="Unexpected columns"):
+        boost.load_existing_rows(historical_output, "fragile")

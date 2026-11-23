@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Compute the intrinsic annihilation boost of saved repopulations.
 
-For every saved row in an original repopulated HDF5 catalogue, this product
-uses the stored NFW characteristic density and scale radius to compute
+For every saved row with ``Vmax <= 8 km/s`` in an original repopulated HDF5
+catalogue, this product uses the stored NFW characteristic density and scale
+radius to compute
 
     L_i = (7 pi / 6) rho_s^2 r_s^3.
 
@@ -13,9 +14,9 @@ CLUMPY configuration.
 
 This is an intrinsic, per-repopulation quantity.  It is independent of the
 observer position, NSIDE, pointlike/extended classification, and map catalogue
-cuts.  It includes all SAVED subhalos in ``iteration_0/data``; physical objects
-removed by the repopulation model before HDF5 storage are outside its scope.
-Only the required columns are read, in configurable chunks.
+cuts.  It includes all SAVED dark-satellite candidates in ``iteration_0/data``;
+physical objects removed by the repopulation model before HDF5 storage are
+outside its scope.  Only the required columns are read, in configurable chunks.
 """
 
 from __future__ import annotations
@@ -41,9 +42,15 @@ DEFAULT_STOP_ID = 500
 VALID_SCENARIOS = ("fragile", "resilient")
 DATASET_NAME = "iteration_0/data"
 ITERATION_GROUP = "iteration_0"
+DARK_SATELLITE_MAX_VMAX_KM_S = 8.0
+POPULATION_SELECTION = "dark_vmax_le_8kms"
+POPULATION_OUTPUT_TAG = "dark_vmax_le_8kms"
 
 CSV_FIELDS = (
     "repop_id",
+    "scenario",
+    "population_selection",
+    "max_vmax_km_s",
     "boost_factor",
     "L_sub_total",
     "n_subhalos",
@@ -144,7 +151,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Output CSV. By default, writes outputs/repopulation_boost/"
-            "substructure_boost_<scenario>_0500.csv."
+            "substructure_boost_dark_vmax_le_8kms_<scenario>_0500.csv."
         ),
     )
     parser.add_argument(
@@ -168,8 +175,77 @@ def default_output_path(scenario: str) -> Path:
         REPOSITORY_ROOT
         / "outputs"
         / "repopulation_boost"
-        / f"substructure_boost_{scenario}_0500.csv"
+        / f"substructure_boost_{POPULATION_OUTPUT_TAG}_{scenario}_0500.csv"
     )
+
+
+def dark_satellite_selection_mask(
+    vmax: np.ndarray,
+    *,
+    path: Path,
+    start: int,
+) -> np.ndarray:
+    """Validate Vmax and select the inclusive dark-satellite population."""
+    invalid = ~np.isfinite(vmax) | (vmax <= 0.0)
+    if np.any(invalid):
+        local_index = int(np.flatnonzero(invalid)[0])
+        value = vmax[local_index]
+        raise ValueError(
+            f"Invalid Vmax at row {start + local_index} in {path}: "
+            f"expected a finite positive value, found {value!r}."
+        )
+    return vmax <= DARK_SATELLITE_MAX_VMAX_KM_S
+
+
+def selection_metadata_row(scenario: str) -> dict[str, str]:
+    """Return the fixed population metadata stored in every output row."""
+    if scenario not in VALID_SCENARIOS:
+        raise ValueError(f"scenario must be one of {VALID_SCENARIOS}")
+    return {
+        "scenario": scenario,
+        "population_selection": POPULATION_SELECTION,
+        "max_vmax_km_s": np.format_float_positional(
+            DARK_SATELLITE_MAX_VMAX_KM_S,
+            unique=True,
+            trim="-",
+        ),
+    }
+
+
+def validate_selection_metadata(
+    row: dict[str, str],
+    path: Path,
+    line_number: int,
+    scenario: str,
+) -> None:
+    """Reject resume rows produced for another scenario or population."""
+    if scenario not in VALID_SCENARIOS:
+        raise ValueError(f"scenario must be one of {VALID_SCENARIOS}")
+    try:
+        recorded_scenario = row["scenario"]
+        population_selection = row["population_selection"]
+        max_vmax_km_s = float(row["max_vmax_km_s"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(
+            f"Invalid population metadata at {path}:{line_number}: {row}"
+        ) from error
+    if recorded_scenario != scenario:
+        raise ValueError(
+            f"Scenario mismatch at {path}:{line_number}: expected {scenario!r}, "
+            f"found {recorded_scenario!r}."
+        )
+    if population_selection != POPULATION_SELECTION or not np.isclose(
+        max_vmax_km_s,
+        DARK_SATELLITE_MAX_VMAX_KM_S,
+        rtol=0.0,
+        atol=0.0,
+    ):
+        raise ValueError(
+            f"Population selection mismatch at {path}:{line_number}: "
+            f"expected {POPULATION_SELECTION} with "
+            f"Vmax <= {DARK_SATELLITE_MAX_VMAX_KM_S} km/s, found "
+            f"{population_selection!r} with max_vmax_km_s={max_vmax_km_s!r}."
+        )
 
 
 def _decode_text(value: object, *, location: str, path: Path) -> str:
@@ -414,6 +490,7 @@ def scan_catalogue(
     max_l = ACCUMULATION_DTYPE(-np.inf)
     vmax_at_max_js = math.nan
     vmax_at_max_l = math.nan
+    n_selected = 0
 
     with h5py.File(path, "r") as handle:
         dataset, indices, host = validate_catalogue_metadata(handle, path)
@@ -430,28 +507,44 @@ def scan_catalogue(
                 dataset[start:stop, indices["rho_s"]], dtype=ACCUMULATION_DTYPE
             )
             _validate_chunk(
-                {"Js": js, "Vmax": vmax, "r_s": rs, "rho_s": rho_s},
+                {"Js": js, "r_s": rs, "rho_s": rho_s},
                 path,
                 start,
             )
+            selected = dark_satellite_selection_mask(vmax, path=path, start=start)
+            local_count = int(np.count_nonzero(selected))
+            n_selected += local_count
+            if local_count == 0:
+                continue
 
-            luminosity = SUBHALO_LUMINOSITY_COEFFICIENT * rho_s**2 * rs**3
-            total_js += np.sum(js, dtype=ACCUMULATION_DTYPE)
+            selected_js = js[selected]
+            selected_vmax = vmax[selected]
+            luminosity = (
+                SUBHALO_LUMINOSITY_COEFFICIENT
+                * rho_s[selected] ** 2
+                * rs[selected] ** 3
+            )
+            total_js += np.sum(selected_js, dtype=ACCUMULATION_DTYPE)
             total_l += np.sum(luminosity, dtype=ACCUMULATION_DTYPE)
 
-            local_js_index = int(np.argmax(js))
-            local_js_max = float(js[local_js_index])
+            local_js_index = int(np.argmax(selected_js))
+            local_js_max = float(selected_js[local_js_index])
             if local_js_max > max_js:
                 max_js = local_js_max
-                vmax_at_max_js = float(vmax[local_js_index])
+                vmax_at_max_js = float(selected_vmax[local_js_index])
 
             local_l_index = int(np.argmax(luminosity))
             local_l_max = luminosity[local_l_index]
             if local_l_max > max_l:
                 max_l = local_l_max
-                vmax_at_max_l = float(vmax[local_l_index])
+                vmax_at_max_l = float(selected_vmax[local_l_index])
 
     l_mw0 = host_luminosity(host)
+    if n_selected == 0:
+        raise ValueError(
+            f"Catalogue contains no subhalos with "
+            f"Vmax <= {DARK_SATELLITE_MAX_VMAX_KM_S} km/s: {path}"
+        )
     if not np.isfinite(total_l) or total_l <= 0.0:
         raise ValueError(f"Invalid accumulated subhalo luminosity in {path}: {total_l!r}")
     if not np.isfinite(total_js) or total_js <= 0.0:
@@ -464,7 +557,7 @@ def scan_catalogue(
             repop_id=repop_id,
             boost_factor=total_l / l_mw0,
             l_sub_total=total_l,
-            n_subhalos=n_rows,
+            n_subhalos=n_selected,
             sum_js=total_js,
             max_js=max_js,
             max_l_subhalo=max_l,
@@ -486,9 +579,10 @@ def _format_extended(value: np.longdouble | float) -> str:
     )
 
 
-def result_to_row(result: BoostResult) -> dict[str, str]:
+def result_to_row(result: BoostResult, scenario: str) -> dict[str, str]:
     return {
         "repop_id": str(result.repop_id),
+        **selection_metadata_row(scenario),
         "boost_factor": _format_extended(result.boost_factor),
         "L_sub_total": _format_extended(result.l_sub_total),
         "n_subhalos": str(result.n_subhalos),
@@ -501,14 +595,27 @@ def result_to_row(result: BoostResult) -> dict[str, str]:
     }
 
 
-def _validate_csv_row(row: dict[str, str], path: Path, line_number: int) -> int:
+def _validate_csv_row(
+    row: dict[str, str],
+    path: Path,
+    line_number: int,
+    scenario: str,
+) -> int:
+    validate_selection_metadata(row, path, line_number, scenario)
     try:
         repop_id = int(row["repop_id"])
         n_subhalos = int(row["n_subhalos"])
         values = {
             name: float(row[name])
             for name in CSV_FIELDS
-            if name not in {"repop_id", "n_subhalos"}
+            if name
+            not in {
+                "repop_id",
+                "scenario",
+                "population_selection",
+                "max_vmax_km_s",
+                "n_subhalos",
+            }
         }
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError(f"Invalid CSV row at {path}:{line_number}: {row}") from error
@@ -518,10 +625,15 @@ def _validate_csv_row(row: dict[str, str], path: Path, line_number: int) -> int:
         raise ValueError(f"Invalid CSV row at {path}:{line_number}: {row}")
     if values["frac_Lmax"] > 1.0:
         raise ValueError(f"Invalid frac_Lmax at {path}:{line_number}: {row}")
+    if (
+        values["vmax_at_max_Js"] > DARK_SATELLITE_MAX_VMAX_KM_S
+        or values["vmax_at_max_L"] > DARK_SATELLITE_MAX_VMAX_KM_S
+    ):
+        raise ValueError(f"Invalid selected Vmax at {path}:{line_number}: {row}")
     return repop_id
 
 
-def load_existing_rows(path: Path) -> dict[int, dict[str, str]]:
+def load_existing_rows(path: Path, scenario: str) -> dict[int, dict[str, str]]:
     rows: dict[int, dict[str, str]] = {}
     if not path.exists() or path.stat().st_size == 0:
         return rows
@@ -533,7 +645,7 @@ def load_existing_rows(path: Path) -> dict[int, dict[str, str]]:
                 f"expected {list(CSV_FIELDS)}."
             )
         for line_number, row in enumerate(reader, start=2):
-            repop_id = _validate_csv_row(row, path, line_number)
+            repop_id = _validate_csv_row(row, path, line_number, scenario)
             if repop_id in rows:
                 raise ValueError(f"Duplicate repop_id {repop_id} in {path}")
             rows[repop_id] = row
@@ -590,7 +702,7 @@ def run_scan(
             f"Output already exists: {output}. Use --resume to preserve its rows."
         )
 
-    rows = load_existing_rows(output) if resume else {}
+    rows = load_existing_rows(output, scenario) if resume else {}
     if resume and list(rows) != sorted(rows):
         write_rows_atomic(output, rows)
     reference_host: HostParameters | None = None
@@ -612,7 +724,7 @@ def run_scan(
             validate_host_consistency(reference_host, host, path)
 
         if not already_complete:
-            rows[repop_id] = result_to_row(result)
+            rows[repop_id] = result_to_row(result, scenario)
             write_rows_atomic(output, rows)
 
         print(
