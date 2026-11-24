@@ -35,6 +35,8 @@ AURIGA_COLUMN = "Jtot"
 DWARF_COLUMN = "Jlist"
 EXPECTED_NSIDE = 2048
 EXPECTED_UNIT = u.GeV**2 / u.cm**5
+# Exact float32 marker used by CLUMPY for an empty Jlist pixel.
+CLUMPY_EMPTY_JLIST = np.float32(1.0e-40)
 DEFAULT_CHUNK_SIZE = 1_000_000
 DEFAULT_XSIZE = 2000
 PANEL_TITLE_FONTSIZE = 22.6
@@ -247,6 +249,7 @@ def checked_values(
     path: Path,
     start: int,
     stop: int,
+    replace_clumpy_floor: bool = False,
 ) -> np.ndarray:
     values = np.asarray(table[column][start:stop], dtype=np.float64)
     if np.any(~np.isfinite(values)) or np.any(values < 0.0):
@@ -254,6 +257,11 @@ def checked_values(
             f"{path}:{column}: non-finite or negative value in rows "
             f"{start}:{stop}."
         )
+    if replace_clumpy_floor:
+        empty = values == float(CLUMPY_EMPTY_JLIST)
+        if np.any(empty):
+            values = values.copy()
+            values[empty] = 0.0
     return values
 
 
@@ -301,6 +309,7 @@ def scan_scenario(
                     metadata.path,
                     start,
                     stop,
+                    replace_clumpy_floor=True,
                 )
                 combined = auriga_values + dwarf_values
                 positive = combined > 0.0
@@ -338,6 +347,10 @@ def load_combined_log_map(
         dwarf_values = np.asarray(
             dwarf_table[DWARF_COLUMN][start:stop], dtype=np.float64
         )
+        empty = dwarf_values == float(CLUMPY_EMPTY_JLIST)
+        if np.any(empty):
+            dwarf_values = dwarf_values.copy()
+            dwarf_values[empty] = 0.0
         combined = auriga_values + dwarf_values
         positive = combined > 0.0
         destination = log_map[start:stop]

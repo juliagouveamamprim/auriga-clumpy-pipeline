@@ -32,6 +32,8 @@ PIXEL_COLUMN = "PIXEL"
 J_COLUMN = "Jlist"
 EXPECTED_NSIDE = 2048
 EXPECTED_UNIT = u.GeV**2 / u.cm**5
+# Exact float32 marker used by CLUMPY for an empty Jlist pixel.
+CLUMPY_EMPTY_JLIST = np.float32(1.0e-40)
 CHUNK_SIZE = 1_000_000
 XSIZE = 2000
 PANEL_TITLE_FONTSIZE = 22.6
@@ -161,7 +163,7 @@ def scan_map(path: Path, chunk_size: int) -> tuple[float, float, int, int]:
     minimum = np.inf
     maximum = -np.inf
     n_positive = 0
-    n_zero = 0
+    n_empty = 0
     with fits.open(path, mode="readonly", memmap=True) as hdul:
         if HDU_NAME not in hdul:
             raise ValueError(f"{path}: missing {HDU_NAME!r} extension.")
@@ -185,9 +187,10 @@ def scan_map(path: Path, chunk_size: int) -> tuple[float, float, int, int]:
                     f"{path}:{J_COLUMN}: non-finite or negative value in rows "
                     f"{start}:{stop}."
                 )
-            positive = values > 0.0
+            empty = (values == 0.0) | (values == CLUMPY_EMPTY_JLIST)
+            positive = ~empty & (values > 0.0)
             n_positive += int(np.count_nonzero(positive))
-            n_zero += int(values.size - np.count_nonzero(positive))
+            n_empty += int(np.count_nonzero(empty))
             if np.any(positive):
                 log_values = np.log10(values[positive].astype(np.float64))
                 minimum = min(minimum, float(log_values.min()))
@@ -195,7 +198,7 @@ def scan_map(path: Path, chunk_size: int) -> tuple[float, float, int, int]:
 
     if n_positive == 0:
         raise ValueError(f"{path}:{J_COLUMN}: no strictly positive pixels.")
-    return minimum, maximum, n_positive, n_zero
+    return minimum, maximum, n_positive, n_empty
 
 
 def load_log_map(path: Path, chunk_size: int) -> np.ndarray:
@@ -209,7 +212,8 @@ def load_log_map(path: Path, chunk_size: int) -> np.ndarray:
         for start in range(0, npix, chunk_size):
             stop = min(start + chunk_size, npix)
             chunk = np.asarray(values[start:stop])
-            positive = chunk > 0.0
+            empty = (chunk == 0.0) | (chunk == CLUMPY_EMPTY_JLIST)
+            positive = ~empty & (chunk > 0.0)
             destination = log_map[start:stop]
             destination[positive] = np.log10(chunk[positive]).astype(
                 np.float32, copy=False
@@ -296,10 +300,10 @@ def main() -> None:
     }
     ranges = []
     for profile, path in paths.items():
-        minimum, maximum, n_positive, n_zero = scan_map(path, args.chunk_size)
+        minimum, maximum, n_positive, n_empty = scan_map(path, args.chunk_size)
         ranges.append((minimum, maximum))
         print(
-            f"{profile}: positive={n_positive:,}, zero={n_zero:,}, "
+            f"{profile}: positive={n_positive:,}, empty={n_empty:,}, "
             f"log10(J)=[{minimum:.8g}, {maximum:.8g}]",
             flush=True,
         )
