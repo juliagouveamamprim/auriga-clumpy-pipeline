@@ -427,6 +427,9 @@ def make_scenario_figure(
                 cbar=False,
                 notext=True,
             )
+            projection_cmap = plt.gca().get_images()[0].cmap
+            projection_cmap.set_under("#ffffff")
+            projection_cmap.set_bad("#000000")
             hp.graticule(dpar=30, dmer=30, color="#b8b8b8", alpha=0.25)
             del log_map
 
