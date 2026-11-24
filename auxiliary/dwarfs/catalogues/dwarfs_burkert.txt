@@ -1,0 +1,13 @@
+# arXiv:2508.19120v3, central values from Tables 2 and A3.
+# J2000 coordinates from Table 2 converted to Galactic l,b with Astropy.
+# Table A3 rho_s values multiplied by 1e7 to give Msun/kpc^3.
+# Published Rtid is used as the CLUMPY outer boundary Rdelta.
+# Name  Type  l[deg]          b[deg]          d[kpc] z   Rdelta[kpc] rhos[Msun/kpc^3] rs[kpc] profile   #1 #2 #3
+CBe     DSPH  241.8867205650  +83.6111905241  42     -1  19          5.7e8              1.7     kBURKERT  -1 -1 -1
+DraI    DSPH  86.3678333823   +34.7217086706  75     -1  4.30        3.8e8              0.32    kBURKERT  -1 -1 -1
+RetII   DSPH  266.2988028988  -49.7381058639  32     -1  5.8         3.8e8              0.28    kBURKERT  -1 -1 -1
+Scl     DSPH  287.5340604433  -83.1564990887  84     -1  3.71        4.08e8             0.247   kBURKERT  -1 -1 -1
+SgrII   DSPH  18.9355462450   -22.8975234001  67     -1  4.2         2.6e9              0.36    kBURKERT  -1 -1 -1
+UMaII   DSPH  152.4642549339  +37.4429011626  35     -1  2.2         1.6e8              0.43    kBURKERT  -1 -1 -1
+UMi     DSPH  104.9654144976  +44.8003593134  68     -1  15.3        1.63e8             1.62    kBURKERT  -1 -1 -1
+Wil1    DSPH  158.5769684258  +56.7801857383  38     -1  1.35        2.9e9              0.070   kBURKERT  -1 -1 -1
