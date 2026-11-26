@@ -1,5 +1,40 @@
 # Catalogue diagnostics
 
+## Pre-cut dark-satellite population counts
+
+`scripts/scan_dark_population_counts.py` counts the production-valid dark
+satellites before any numerical brightness cuts. It imports the production
+validity mask and NSIDE-derived angular-threshold helpers directly from
+`scripts/prepare_subhalo_components.py`, applies the inclusive
+`Vmax <= 8 km/s` selection, and splits the selected population at
+`theta_s = 0.03 deg`. It does not calculate a J-factor reference, brightness
+proxy, HEALPix map, or CLUMPY product.
+
+The per-repopulation CSV is atomically checkpointed after every catalogue.
+Rerunning the same command validates and skips existing `(scenario, repop_id)`
+rows, so an interrupted scan resumes without duplicates. A second CSV reports
+the arithmetic mean counts, the mean of the per-repopulation fractions, and
+the aggregate fractions formed from the summed counts.
+
+Run all 500 repopulations of both scenarios on Lattes with:
+
+```bash
+python3 -u diagnostics/catalogue/scripts/scan_dark_population_counts.py \
+  --input-root /dados5/julia/Auriga_outputs_hdf5_v2 \
+  --output-csv outputs/diagnostics/dark_population_counts_0500.csv \
+  --summary-csv outputs/diagnostics/dark_population_counts_0500_summary.csv \
+  --repop-start 0 \
+  --repop-end 499 \
+  --scenarios fragile,resilient \
+  --figure9-csv outputs/diagnostics/cuts/figure9/repops_0000_0049_fragile-resilient_nside2048_dark_vmax_le_8kms_figure9_combined.csv \
+  --total-count-npz outputs/diagnostics/cuts/relative_js_cumulative/relative_js_cumulative_0500repops.npz
+```
+
+The Figure 9 comparison is exact and aborts on any mismatch. Differences from
+the relative-J NPZ are reported but do not abort, because that earlier scan
+validated only `Js` and `Vmax`, whereas this diagnostic uses the complete
+production validity mask.
+
 ## Brightest retained production subhalo
 
 `scripts/scan_retained_subhalo_jsmax.py` identifies the retained pointlike and
